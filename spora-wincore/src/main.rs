@@ -7,6 +7,8 @@ pub mod proto {
     tonic::include_proto!("spora");
 }
 
+use std::sync::Arc;
+
 use log::info;
 use tonic::transport::Server;
 
@@ -40,12 +42,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let addr = "[::1]:50051".parse()?;
-    let service = SporaService::new();
+    let shutdown = Arc::new(tokio::sync::Notify::new());
+    let service = SporaService::new(shutdown.clone());
 
     info!("spora-wincore gRPC server listening on {}", addr);
     Server::builder()
         .add_service(SporaServer::new(service))
-        .serve(addr)
+        .serve_with_shutdown(addr, shutdown.notified())
         .await?;
 
     Ok(())

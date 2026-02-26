@@ -76,4 +76,13 @@ impl GrpcClient {
             .map_err(|e| format!("Disconnect RPC failed: {e}"))?;
         Ok(())
     }
+
+    pub async fn shutdown(&self) -> Result<(), String> {
+        self.inner
+            .clone()
+            .shutdown(ShutdownRequest {})
+            .await
+            .map_err(|e| format!("Shutdown RPC failed: {e}"))?;
+        Ok(())
+    }
 }

@@ -18,12 +18,14 @@ const KEEPALIVE_SECS: u64 = 20;
 
 pub struct SporaService {
     sessions: Arc<SessionStore>,
+    shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl SporaService {
-    pub fn new() -> Self {
+    pub fn new(shutdown: Arc<tokio::sync::Notify>) -> Self {
         Self {
             sessions: Arc::new(SessionStore::new()),
+            shutdown,
         }
     }
 }
@@ -277,6 +279,15 @@ impl Spora for SporaService {
         let key = spora_core::make_secret_key();
         info!("gRPC MakeSecretKey → {}", key);
         Ok(Response::new(MakeSecretKeyResponse { key }))
+    }
+
+    async fn shutdown(
+        &self,
+        _request: Request<ShutdownRequest>,
+    ) -> Result<Response<ShutdownResponse>, Status> {
+        info!("gRPC Shutdown — exiting");
+        self.shutdown.notify_one();
+        Ok(Response::new(ShutdownResponse {}))
     }
 }
 

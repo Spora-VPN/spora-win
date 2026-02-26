@@ -301,6 +301,16 @@ fn main() {
     });
 
     app.run().unwrap();
+
+    // UI closed — shut down wincore
+    rt.block_on(async {
+        let grpc = client.lock().unwrap().clone();
+        if let Some(grpc) = grpc {
+            if let Err(e) = grpc.shutdown().await {
+                log::warn!("Shutdown RPC failed: {e}");
+            }
+        }
+    });
 }
 
 // ── Helper: sync share list from store → UI ──────────────────────────

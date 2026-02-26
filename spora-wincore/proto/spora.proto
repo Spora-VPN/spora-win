@@ -8,6 +8,7 @@ service Spora {
   rpc StopShare (StopShareRequest) returns (StopShareResponse);
   rpc Disconnect (DisconnectRequest) returns (DisconnectResponse);
   rpc MakeSecretKey (MakeSecretKeyRequest) returns (MakeSecretKeyResponse);
+  rpc Shutdown (ShutdownRequest) returns (ShutdownResponse);
 }
 
 // --- Share ---
@@ -84,3 +85,9 @@ message MakeSecretKeyRequest {}
 message MakeSecretKeyResponse {
   string key = 1;
 }
+
+// --- Shutdown ---
+
+message ShutdownRequest {}
+
+message ShutdownResponse {}
