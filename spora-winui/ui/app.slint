@@ -71,12 +71,29 @@ export component AppWindow inherits Window {
                 padding-right: 20px;
                 alignment: space-between;
 
-                Text {
-                    text: "SPORA";
-                    font-size: 20px;
-                    font-weight: 700;
-                    color: Palette.text-main;
-                    vertical-alignment: center;
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Rectangle {
+                        width: 24px;
+
+                        Image {
+                            source: @image-url("../../assets/logo.svg");
+                            width: parent.width;
+                            height: 30px;
+                            x: 0;
+                            y: (parent.height - self.height) / 2;
+                            image-fit: contain;
+                        }
+                    }
+
+                    Text {
+                        text: "SPORA";
+                        font-size: 20px;
+                        font-weight: 700;
+                        color: Palette.text-main;
+                        vertical-alignment: center;
+                    }
                 }
 
                 HorizontalLayout {
