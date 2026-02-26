@@ -1,0 +1,890 @@
+// ── Color palette (matches Android app) ──────────────────────────────
+global Palette {
+    out property <color> sage:             #D2D6CC;
+    out property <color> sage-dark:        #C0C4BA;
+    out property <color> slate:            #4D5954;
+    out property <color> slate-dark:       #3A4440;
+    out property <color> orange:           #E36C50;
+    out property <color> text-main:        #181A18;
+    out property <color> text-muted:       #626660;
+    out property <color> text-light:       #F0F2EE;
+    out property <color> text-light-muted: #A3A8A4;
+    out property <color> card-bg:          #FFFFFF.with-alpha(40%);
+    out property <color> green:            #4CAF50;
+    out property <color> yellow:           #FFC107;
+}
+
+// ── Connection item model ────────────────────────────────────────────
+struct ConnectionItem {
+    id: string,
+    label: string,
+    detail: string,       // URL for use-connections, empty for share
+    status: string,       // "inactive" | "starting" | "sharing" | "connecting" | "connected"
+    active: bool,
+}
+
+// ── Main window ──────────────────────────────────────────────────────
+export component AppWindow inherits Window {
+    title: "Spora";
+    default-font-family: "Segoe UI";
+    default-font-size: 14px;
+    width: 400px;
+    height: 680px;
+    background: Palette.sage;
+
+    // ── State ────────────────────────────────────────────────────────
+    in-out property <int> current-tab: 0;    // 0 = Share, 1 = Use
+    in-out property <string> status-text: "Ready";
+    in-out property <bool> core-connected: false;
+
+    in-out property <[ConnectionItem]> share-connections: [];
+    in-out property <[ConnectionItem]> use-connections: [];
+
+    // Modal state
+    in-out property <bool> show-add-modal: false;
+    in-out property <bool> show-rename-modal: false;
+    in-out property <bool> show-delete-modal: false;
+    in-out property <string> modal-id: "";
+    in-out property <string> modal-label: "";
+    in-out property <string> modal-url: "";
+    in-out property <bool> modal-is-share: false;    // context for rename/delete
+
+    // ── Callbacks ────────────────────────────────────────────────────
+    callback share-new();
+    callback use-new();
+    callback toggle-share(string);         // id
+    callback toggle-use(string);           // id
+    callback delete-connection(string, bool);  // id, is-share
+    callback rename-connection(string, bool, string); // id, is-share, new-label
+    callback save-share(string);           // label (new share)
+    callback save-use(string, string);     // label, url (new use)
+    callback copy-to-clipboard(string);    // text to copy
+
+    VerticalLayout {
+        // ── Header ───────────────────────────────────────────────────
+        Rectangle {
+            height: 56px;
+            background: Palette.sage;
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                alignment: space-between;
+
+                Text {
+                    text: "SPORA";
+                    font-size: 20px;
+                    font-weight: 700;
+                    color: Palette.text-main;
+                    vertical-alignment: center;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 5px;
+                        background: root.core-connected ? Palette.green : Palette.orange;
+                    }
+
+                    Text {
+                        text: root.status-text;
+                        font-size: 13px;
+                        color: Palette.text-muted;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // ── Tab content ──────────────────────────────────────────────
+        Rectangle {
+            vertical-stretch: 1;
+            background: Palette.sage;
+
+            // Share page
+            if root.current-tab == 0 : VerticalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                // Action card
+                Rectangle {
+                    height: 90px;
+                    border-radius: 16px;
+                    background: Palette.orange;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 16px;
+                        alignment: space-between;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+
+                            Text {
+                                text: "Share Your Internet";
+                                font-size: 18px;
+                                font-weight: 600;
+                                color: Palette.text-light;
+                            }
+                            Text {
+                                text: "Create a link to share your connection";
+                                font-size: 12px;
+                                color: Palette.text-light-muted;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 44px;
+                            height: 44px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 22px;
+                            background: Palette.text-light.with-alpha(20%);
+
+                            Text {
+                                text: "+";
+                                font-size: 24px;
+                                color: Palette.text-light;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    root.modal-is-share = true;
+                                    root.show-add-modal = true;
+                                    root.modal-label = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Saved connections header
+                Text {
+                    text: "SAVED CONNECTIONS";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: Palette.text-muted;
+                    letter-spacing: 1px;
+                }
+
+                // Connection list
+                Flickable {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        for conn in root.share-connections : Rectangle {
+                            height: conn.detail != "" ? 80px : 64px;
+                            border-radius: 12px;
+                            background: Palette.card-bg;
+
+                            // Right-click to rename (behind buttons in z-order)
+                            TouchArea {
+                                pointer-event(ev) => {
+                                    if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
+                                        root.modal-id = conn.id;
+                                        root.modal-label = conn.label;
+                                        root.modal-is-share = true;
+                                        root.show-rename-modal = true;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 12px;
+                                spacing: 12px;
+                                alignment: space-between;
+
+                                // Label + URL + status
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 3px;
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: conn.label;
+                                        font-size: 15px;
+                                        font-weight: 500;
+                                        color: Palette.text-main;
+                                        overflow: elide;
+                                    }
+
+                                    if conn.detail != "" : Text {
+                                        text: conn.detail;
+                                        font-size: 11px;
+                                        color: Palette.text-muted;
+                                        overflow: elide;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 6px;
+
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 4px;
+                                            background: conn.status == "sharing" ? Palette.green
+                                                      : conn.status == "starting" ? Palette.yellow
+                                                      : Palette.text-muted;
+                                        }
+
+                                        Text {
+                                            text: conn.status == "sharing" ? "Sharing"
+                                                : conn.status == "starting" ? "Starting..."
+                                                : "Inactive";
+                                            font-size: 12px;
+                                            color: conn.status == "sharing" ? Palette.green
+                                                 : conn.status == "starting" ? Palette.yellow
+                                                 : Palette.text-muted;
+                                        }
+                                    }
+                                }
+
+                                // Copy button (visible when URL available)
+                                if conn.detail != "" : Rectangle {
+                                    width: 44px;
+                                    height: 26px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 6px;
+                                    background: copy-touch.has-hover ? Palette.sage-dark : Palette.sage;
+
+                                    Text {
+                                        text: "Copy";
+                                        font-size: 11px;
+                                        font-weight: 600;
+                                        color: Palette.text-muted;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    copy-touch := TouchArea {
+                                        clicked => {
+                                            root.copy-to-clipboard(conn.detail);
+                                        }
+                                    }
+                                }
+
+                                // Delete button
+                                Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 6px;
+
+                                    Text {
+                                        text: "✕";
+                                        font-size: 14px;
+                                        color: Palette.text-muted;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            root.modal-id = conn.id;
+                                            root.modal-label = conn.label;
+                                            root.modal-is-share = true;
+                                            root.show-delete-modal = true;
+                                        }
+                                    }
+                                }
+
+                                // Toggle
+                                Rectangle {
+                                    width: 48px;
+                                    height: 28px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 14px;
+                                    background: conn.active ? Palette.green : Palette.sage-dark;
+
+                                    animate background { duration: 150ms; }
+
+                                    Rectangle {
+                                        x: conn.active ? parent.width - self.width - 3px : 3px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 22px;
+                                        height: 22px;
+                                        border-radius: 11px;
+                                        background: white;
+
+                                        animate x { duration: 150ms; easing: ease-in-out; }
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            root.toggle-share(conn.id);
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+                }
+            }
+
+            // Use page
+            if root.current-tab == 1 : VerticalLayout {
+                padding: 16px;
+                spacing: 16px;
+
+                // Action card
+                Rectangle {
+                    height: 90px;
+                    border-radius: 16px;
+                    background: Palette.orange;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 16px;
+                        alignment: space-between;
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 4px;
+
+                            Text {
+                                text: "Connect via Friend";
+                                font-size: 18px;
+                                font-weight: 600;
+                                color: Palette.text-light;
+                            }
+                            Text {
+                                text: "Use a connection a friend has shared with you";
+                                font-size: 12px;
+                                color: Palette.text-light-muted;
+                            }
+                        }
+
+                        Rectangle {
+                            width: 44px;
+                            height: 44px;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: 22px;
+                            background: Palette.text-light.with-alpha(20%);
+
+                            Text {
+                                text: "+";
+                                font-size: 24px;
+                                color: Palette.text-light;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    root.modal-is-share = false;
+                                    root.show-add-modal = true;
+                                    root.modal-label = "";
+                                    root.modal-url = "";
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Saved connections header
+                Text {
+                    text: "SAVED CONNECTIONS";
+                    font-size: 11px;
+                    font-weight: 600;
+                    color: Palette.text-muted;
+                    letter-spacing: 1px;
+                }
+
+                // Connection list
+                Flickable {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        for conn in root.use-connections : Rectangle {
+                            height: 72px;
+                            border-radius: 12px;
+                            background: Palette.card-bg;
+
+                            // Right-click to rename (behind buttons in z-order)
+                            TouchArea {
+                                pointer-event(ev) => {
+                                    if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
+                                        root.modal-id = conn.id;
+                                        root.modal-label = conn.label;
+                                        root.modal-is-share = false;
+                                        root.show-rename-modal = true;
+                                    }
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 16px;
+                                padding-right: 12px;
+                                spacing: 12px;
+                                alignment: space-between;
+
+                                // Label + URL + status
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 3px;
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: conn.label;
+                                        font-size: 15px;
+                                        font-weight: 500;
+                                        color: Palette.text-main;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: conn.detail;
+                                        font-size: 11px;
+                                        color: Palette.text-muted;
+                                        overflow: elide;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: 6px;
+
+                                        Rectangle {
+                                            width: 8px;
+                                            height: 8px;
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: 4px;
+                                            background: conn.status == "connected" ? Palette.green
+                                                      : conn.status == "connecting" ? Palette.yellow
+                                                      : Palette.text-muted;
+                                        }
+
+                                        Text {
+                                            text: conn.status == "connected" ? "Connected"
+                                                : conn.status == "connecting" ? "Connecting..."
+                                                : "Inactive";
+                                            font-size: 12px;
+                                            color: conn.status == "connected" ? Palette.green
+                                                 : conn.status == "connecting" ? Palette.yellow
+                                                 : Palette.text-muted;
+                                        }
+                                    }
+                                }
+
+                                // Delete button
+                                Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 6px;
+
+                                    Text {
+                                        text: "✕";
+                                        font-size: 14px;
+                                        color: Palette.text-muted;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            root.modal-id = conn.id;
+                                            root.modal-label = conn.label;
+                                            root.modal-is-share = false;
+                                            root.show-delete-modal = true;
+                                        }
+                                    }
+                                }
+
+                                // Toggle
+                                Rectangle {
+                                    width: 48px;
+                                    height: 28px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: 14px;
+                                    background: conn.active ? Palette.green : Palette.sage-dark;
+
+                                    animate background { duration: 150ms; }
+
+                                    Rectangle {
+                                        x: conn.active ? parent.width - self.width - 3px : 3px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 22px;
+                                        height: 22px;
+                                        border-radius: 11px;
+                                        background: white;
+
+                                        animate x { duration: 150ms; easing: ease-in-out; }
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            root.toggle-use(conn.id);
+                                        }
+                                    }
+                                }
+                            }
+
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Bottom navigation bar ────────────────────────────────────
+        Rectangle {
+            height: 60px;
+            background: Palette.slate;
+
+            HorizontalLayout {
+                alignment: space-around;
+
+                // Share tab
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: "↑";
+                            font-size: 22px;
+                            color: root.current-tab == 0 ? Palette.text-light : Palette.text-light-muted;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "Share";
+                            font-size: 12px;
+                            font-weight: root.current-tab == 0 ? 600 : 400;
+                            color: root.current-tab == 0 ? Palette.text-light : Palette.text-light-muted;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.current-tab = 0; }
+                    }
+                }
+
+                // Use tab
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: "↓";
+                            font-size: 22px;
+                            color: root.current-tab == 1 ? Palette.text-light : Palette.text-light-muted;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: "Use";
+                            font-size: 12px;
+                            font-weight: root.current-tab == 1 ? 600 : 400;
+                            color: root.current-tab == 1 ? Palette.text-light : Palette.text-light-muted;
+                            horizontal-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        clicked => { root.current-tab = 1; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════
+    // ── Modals (overlay the entire window) ───────────────────────────
+    // ═════════════════════════════════════════════════════════════════
+
+    // ── Add connection modal ─────────────────────────────────────────
+    if show-add-modal : Rectangle {
+        background: Palette.sage.with-alpha(95%);
+
+        TouchArea { /* block clicks through */ }
+
+        VerticalLayout {
+            alignment: center;
+            padding: 32px;
+            spacing: 20px;
+
+            Text {
+                text: root.modal-is-share ? "New Share Connection" : "New Use Connection";
+                font-size: 20px;
+                font-weight: 600;
+                color: Palette.text-main;
+                horizontal-alignment: center;
+            }
+
+            // URL field (use-connections only)
+            if !root.modal-is-share : Rectangle {
+                height: 48px;
+                border-radius: 10px;
+                background: white;
+                border-color: Palette.sage-dark;
+                border-width: 1px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+
+                    url-input := TextInput {
+                        text <=> root.modal-url;
+                        font-size: 14px;
+                        color: Palette.text-main;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Label field
+            Rectangle {
+                height: 48px;
+                border-radius: 10px;
+                background: white;
+                border-color: Palette.sage-dark;
+                border-width: 1px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+
+                    label-input := TextInput {
+                        text <=> root.modal-label;
+                        font-size: 14px;
+                        color: Palette.text-main;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Buttons
+            VerticalLayout {
+                spacing: 10px;
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: save-touch.has-hover ? Palette.slate-dark : Palette.slate;
+
+                    Text {
+                        text: "SAVE CONNECTION";
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Palette.text-light;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    save-touch := TouchArea {
+                        clicked => {
+                            if root.modal-is-share {
+                                root.save-share(root.modal-label);
+                            } else {
+                                root.save-use(root.modal-label, root.modal-url);
+                            }
+                            root.show-add-modal = false;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: transparent;
+
+                    Text {
+                        text: "Cancel";
+                        font-size: 14px;
+                        color: Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { root.show-add-modal = false; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Rename modal ─────────────────────────────────────────────────
+    if show-rename-modal : Rectangle {
+        background: Palette.sage.with-alpha(95%);
+
+        TouchArea { }
+
+        VerticalLayout {
+            alignment: center;
+            padding: 32px;
+            spacing: 20px;
+
+            Text {
+                text: "Rename Connection";
+                font-size: 20px;
+                font-weight: 600;
+                color: Palette.text-main;
+                horizontal-alignment: center;
+            }
+
+            Rectangle {
+                height: 48px;
+                border-radius: 10px;
+                background: white;
+                border-color: Palette.sage-dark;
+                border-width: 1px;
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+
+                    rename-input := TextInput {
+                        text <=> root.modal-label;
+                        font-size: 14px;
+                        color: Palette.text-main;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 10px;
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: rename-save-touch.has-hover ? Palette.slate-dark : Palette.slate;
+
+                    Text {
+                        text: "SAVE";
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Palette.text-light;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    rename-save-touch := TouchArea {
+                        clicked => {
+                            root.rename-connection(root.modal-id, root.modal-is-share, root.modal-label);
+                            root.show-rename-modal = false;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: transparent;
+
+                    Text {
+                        text: "Cancel";
+                        font-size: 14px;
+                        color: Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { root.show-rename-modal = false; }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Delete confirmation modal ────────────────────────────────────
+    if show-delete-modal : Rectangle {
+        background: Palette.sage.with-alpha(95%);
+
+        TouchArea { }
+
+        VerticalLayout {
+            alignment: center;
+            padding: 32px;
+            spacing: 20px;
+
+            Text {
+                text: "Delete Connection";
+                font-size: 20px;
+                font-weight: 600;
+                color: Palette.text-main;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Are you sure?";
+                font-size: 16px;
+                color: Palette.text-main;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "\"" + root.modal-label + "\" will be permanently removed.";
+                font-size: 13px;
+                color: Palette.text-muted;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                spacing: 10px;
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: del-touch.has-hover ? #C0513A : Palette.orange;
+
+                    Text {
+                        text: "DELETE";
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Palette.text-light;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    del-touch := TouchArea {
+                        clicked => {
+                            root.delete-connection(root.modal-id, root.modal-is-share);
+                            root.show-delete-modal = false;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: transparent;
+
+                    Text {
+                        text: "Cancel";
+                        font-size: 14px;
+                        color: Palette.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        clicked => { root.show-delete-modal = false; }
+                    }
+                }
+            }
+        }
+    }
+}

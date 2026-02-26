@@ -1,0 +1,28 @@
+[package]
+name = "spora-wincore"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+spora-core = { path = "../spora-core" }
+tokio = { version = "1", features = ["full"] }
+tonic = "0.13"
+prost = "0.13"
+log = "0.4"
+env_logger = "0.11"
+url = "2.5"
+futures-util = "0.3"
+tokio-stream = "0.1"
+tokio-util = "0.7"
+
+[target.'cfg(windows)'.dependencies]
+wintun = "0.5"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
+] }
+
+[build-dependencies]
+tonic-build = "0.13"

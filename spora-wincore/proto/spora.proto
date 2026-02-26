@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package spora;
+
+service Spora {
+  rpc Share (ShareRequest) returns (stream ShareEvent);
+  rpc Connect (ConnectRequest) returns (stream ConnectEvent);
+  rpc StopShare (StopShareRequest) returns (StopShareResponse);
+  rpc Disconnect (DisconnectRequest) returns (DisconnectResponse);
+  rpc MakeSecretKey (MakeSecretKeyRequest) returns (MakeSecretKeyResponse);
+}
+
+// --- Share ---
+
+message ShareRequest {
+  string key = 1;
+}
+
+message ShareEvent {
+  oneof event {
+    ShareReady ready = 1;
+    ShareConnected connected = 2;
+    ShareError error = 3;
+  }
+}
+
+message ShareReady {
+  int32 handle = 1;
+  string url = 2;
+}
+
+message ShareConnected {}
+
+message ShareError {
+  string message = 1;
+}
+
+// --- Connect ---
+
+message ConnectRequest {
+  string url = 1;
+}
+
+message ConnectEvent {
+  oneof event {
+    ConnectConnected connected = 1;
+    Disconnected disconnected = 2;
+    ConnectError error = 3;
+  }
+}
+
+message ConnectConnected {
+  int32 handle = 1;
+}
+
+message Disconnected {
+  string reason = 1;
+}
+
+message ConnectError {
+  string message = 1;
+}
+
+// --- StopShare ---
+
+message StopShareRequest {
+  int32 handle = 1;
+}
+
+message StopShareResponse {}
+
+// --- Disconnect ---
+
+message DisconnectRequest {
+  int32 handle = 1;
+}
+
+message DisconnectResponse {}
+
+// --- MakeSecretKey ---
+
+message MakeSecretKeyRequest {}
+
+message MakeSecretKeyResponse {
+  string key = 1;
+}
