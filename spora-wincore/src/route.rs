@@ -73,10 +73,14 @@ pub struct RouteManager {
 
 #[cfg(windows)]
 struct RouteEntry {
-    destination: String,
-    mask: String,
-    gateway: String,
-    interface_index: Option<u32>,
+    row: windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2,
+}
+
+/// Parse an IPv4 dotted-decimal string into a `u32` in network byte order.
+#[cfg(windows)]
+fn parse_ipv4(s: &str) -> Result<u32, String> {
+    let addr: std::net::Ipv4Addr = s.parse().map_err(|e| format!("invalid IPv4 '{}': {}", s, e))?;
+    Ok(u32::from_ne_bytes(addr.octets()))
 }
 
 #[allow(dead_code)]
@@ -91,23 +95,30 @@ impl RouteManager {
     /// Add default route (0.0.0.0/0) via the TUN adapter.
     #[cfg(windows)]
     pub fn add_default_route(&mut self, interface_index: u32) -> Result<(), String> {
-        let status = std::process::Command::new("route")
-            .args([
-                "ADD", "0.0.0.0", "MASK", "0.0.0.0", "10.0.85.1",
-                "METRIC", "5", "IF", &interface_index.to_string(),
-            ])
-            .status()
-            .map_err(|e| format!("route ADD failed: {}", e))?;
-        if !status.success() {
-            return Err(format!("route ADD exited with {}", status));
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            CreateIpForwardEntry2, InitializeIpForwardEntry, MIB_IPFORWARD_ROW2,
+        };
+        use windows_sys::Win32::Foundation::ERROR_OBJECT_ALREADY_EXISTS;
+        use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+        unsafe {
+            let mut row: MIB_IPFORWARD_ROW2 = std::mem::zeroed();
+            InitializeIpForwardEntry(&mut row);
+            row.InterfaceIndex = interface_index;
+            // DestinationPrefix: 0.0.0.0/0
+            row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
+            row.DestinationPrefix.PrefixLength = 0;
+            // NextHop: 10.0.85.1 (TUN gateway)
+            row.NextHop.Ipv4.sin_family = AF_INET;
+            row.NextHop.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes([10, 0, 85, 1]);
+            row.Metric = 5;
+            let ret = CreateIpForwardEntry2(&row);
+            if ret != 0 && ret != ERROR_OBJECT_ALREADY_EXISTS {
+                return Err(format!("CreateIpForwardEntry2 (default route) failed: error {}", ret));
+            }
+            info!("Added default route via TUN IF {}", interface_index);
+            self.routes.push(RouteEntry { row });
         }
-        info!("Added default route via TUN IF {}", interface_index);
-        self.routes.push(RouteEntry {
-            destination: "0.0.0.0".into(),
-            mask: "0.0.0.0".into(),
-            gateway: "10.0.85.1".into(),
-            interface_index: Some(interface_index),
-        });
         Ok(())
     }
 
@@ -125,23 +136,36 @@ impl RouteManager {
         original_gateway: &str,
         original_if: u32,
     ) -> Result<(), String> {
-        let status = std::process::Command::new("route")
-            .args([
-                "ADD", ip, "MASK", "255.255.255.255", original_gateway,
-                "IF", &original_if.to_string(),
-            ])
-            .status()
-            .map_err(|e| format!("route ADD (exclude) failed: {}", e))?;
-        if !status.success() {
-            return Err(format!("route ADD (exclude) exited with {}", status));
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            CreateIpForwardEntry2, InitializeIpForwardEntry, MIB_IPFORWARD_ROW2,
+        };
+        use windows_sys::Win32::Foundation::ERROR_OBJECT_ALREADY_EXISTS;
+        use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+        let dest_addr = parse_ipv4(ip)?;
+        let gw_addr = parse_ipv4(original_gateway)?;
+
+        unsafe {
+            let mut row: MIB_IPFORWARD_ROW2 = std::mem::zeroed();
+            InitializeIpForwardEntry(&mut row);
+            row.InterfaceIndex = original_if;
+            // DestinationPrefix: <ip>/32
+            row.DestinationPrefix.Prefix.Ipv4.sin_family = AF_INET;
+            row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr = dest_addr;
+            row.DestinationPrefix.PrefixLength = 32;
+            // NextHop: original gateway
+            row.NextHop.Ipv4.sin_family = AF_INET;
+            row.NextHop.Ipv4.sin_addr.S_un.S_addr = gw_addr;
+            let ret = CreateIpForwardEntry2(&row);
+            if ret != 0 && ret != ERROR_OBJECT_ALREADY_EXISTS {
+                return Err(format!(
+                    "CreateIpForwardEntry2 (exclude {}) failed: error {}",
+                    ip, ret
+                ));
+            }
+            info!("Added host route for {} via {} IF {}", ip, original_gateway, original_if);
+            self.routes.push(RouteEntry { row });
         }
-        info!("Added host route for {} via {} IF {}", ip, original_gateway, original_if);
-        self.routes.push(RouteEntry {
-            destination: ip.into(),
-            mask: "255.255.255.255".into(),
-            gateway: original_gateway.into(),
-            interface_index: Some(original_if),
-        });
         Ok(())
     }
 
@@ -158,31 +182,22 @@ impl RouteManager {
     /// Remove all routes added by this manager.
     #[cfg(windows)]
     pub fn remove_all(&mut self) {
+        use windows_sys::Win32::NetworkManagement::IpHelper::DeleteIpForwardEntry2;
+
         for entry in self.routes.drain(..) {
-            let mut args = vec![
-                "DELETE".to_string(),
-                entry.destination,
-                "MASK".to_string(),
-                entry.mask,
-                entry.gateway,
-            ];
-            if let Some(idx) = entry.interface_index {
-                args.push("IF".into());
-                args.push(idx.to_string());
-            }
-            let result = std::process::Command::new("route")
-                .args(&args)
-                .status();
-            match result {
-                Ok(status) if status.success() => {
-                    info!("Removed route: {}", args.join(" "));
-                }
-                Ok(status) => {
-                    log::warn!("route DELETE exited with {}: {}", status, args.join(" "));
-                }
-                Err(e) => {
-                    log::warn!("route DELETE failed: {}: {}", e, args.join(" "));
-                }
+            let ret = unsafe { DeleteIpForwardEntry2(&entry.row) };
+            let dest_bytes = unsafe {
+                entry.row.DestinationPrefix.Prefix.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes()
+            };
+            let prefix_len = entry.row.DestinationPrefix.PrefixLength;
+            let dest = format!(
+                "{}.{}.{}.{}/{}",
+                dest_bytes[0], dest_bytes[1], dest_bytes[2], dest_bytes[3], prefix_len
+            );
+            if ret == 0 {
+                info!("Removed route: {}", dest);
+            } else {
+                log::warn!("DeleteIpForwardEntry2 failed for {}: error {}", dest, ret);
             }
         }
     }

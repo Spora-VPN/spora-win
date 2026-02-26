@@ -16,7 +16,7 @@ pub struct TunDevice {
 #[allow(dead_code)]
 impl TunDevice {
     /// Create a WinTUN adapter with the given name and MTU.
-    /// Configures the adapter with IP 10.0.85.1/24 via netsh.
+    /// Configures the adapter with IP 10.0.85.1/24 via Win32 API.
     #[cfg(windows)]
     pub fn create(name: &str, mtu: u32) -> Result<Self, String> {
         let dll_path = std::env::current_exe()
@@ -29,33 +29,38 @@ impl TunDevice {
         let adapter = wintun::Adapter::create(&wintun, name, "Spora", None)
             .map_err(|e| format!("failed to create adapter: {}", e))?;
 
-        // Configure IP address via netsh
-        let status = std::process::Command::new("netsh")
-            .args(["interface", "ip", "set", "address", name, "static", "10.0.85.1", "255.255.255.0"])
-            .status()
-            .map_err(|e| format!("netsh set address failed: {}", e))?;
-        if !status.success() {
-            return Err(format!("netsh set address exited with {}", status));
+        let interface_index = adapter
+            .get_adapter_index()
+            .map_err(|e| format!("failed to get adapter index: {}", e))?;
+
+        // Configure IP address via Win32 API
+        unsafe {
+            use windows_sys::Win32::NetworkManagement::IpHelper::{
+                CreateUnicastIpAddressEntry, InitializeUnicastIpAddressEntry,
+                MIB_UNICASTIPADDRESS_ROW,
+            };
+            use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+            let mut row: MIB_UNICASTIPADDRESS_ROW = std::mem::zeroed();
+            InitializeUnicastIpAddressEntry(&mut row);
+            row.InterfaceIndex = interface_index;
+            row.Address.Ipv4.sin_family = AF_INET;
+            row.Address.Ipv4.sin_addr.S_un.S_addr = u32::from_ne_bytes([10, 0, 85, 1]);
+            row.OnLinkPrefixLength = 24;
+            let ret = CreateUnicastIpAddressEntry(&row);
+            if ret != 0 {
+                return Err(format!("CreateUnicastIpAddressEntry failed: error {}", ret));
+            }
         }
 
-        // Set MTU
-        let status = std::process::Command::new("netsh")
-            .args(["interface", "ipv4", "set", "subinterface", name, &format!("mtu={}", mtu)])
-            .status()
-            .map_err(|e| format!("netsh set mtu failed: {}", e))?;
-        if !status.success() {
-            return Err(format!("netsh set mtu exited with {}", status));
-        }
+        // Set MTU via Win32 API
+        set_mtu(interface_index, mtu)?;
 
         let session = std::sync::Arc::new(
             adapter
                 .start_session(wintun::MAX_RING_CAPACITY)
                 .map_err(|e| format!("failed to start session: {}", e))?,
         );
-
-        let interface_index = adapter
-            .get_adapter_index()
-            .map_err(|e| format!("failed to get adapter index: {}", e))?;
 
         info!("WinTUN adapter '{}' created with MTU {}, IF index {}", name, mtu, interface_index);
         Ok(Self { session, _adapter: adapter, interface_index })
@@ -78,16 +83,29 @@ impl TunDevice {
     }
 }
 
-/// Update a named adapter's MTU via netsh. Can be called independently of TunDevice
+/// Update an adapter's MTU via Win32 IP Helper API. Can be called independently of TunDevice
 /// (e.g. from an MTU callback closure).
 #[cfg(windows)]
-pub fn set_mtu(name: &str, mtu: u32) -> Result<(), String> {
-    let status = std::process::Command::new("netsh")
-        .args(["interface", "ipv4", "set", "subinterface", name, &format!("mtu={}", mtu)])
-        .status()
-        .map_err(|e| format!("netsh set mtu failed: {}", e))?;
-    if !status.success() {
-        return Err(format!("netsh set mtu exited with {}", status));
+pub fn set_mtu(interface_index: u32, mtu: u32) -> Result<(), String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetIpInterfaceEntry, MIB_IPINTERFACE_ROW, SetIpInterfaceEntry,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    unsafe {
+        let mut row: MIB_IPINTERFACE_ROW = std::mem::zeroed();
+        row.Family = AF_INET;
+        row.InterfaceIndex = interface_index;
+        let ret = GetIpInterfaceEntry(&mut row);
+        if ret != 0 {
+            return Err(format!("GetIpInterfaceEntry failed: error {}", ret));
+        }
+        row.NlMtu = mtu;
+        row.SitePrefixLength = 0; // required for IPv4, see SetIpInterfaceEntry docs
+        let ret = SetIpInterfaceEntry(&mut row);
+        if ret != 0 {
+            return Err(format!("SetIpInterfaceEntry failed: error {}", ret));
+        }
     }
     info!("TUN MTU updated to {}", mtu);
     Ok(())
@@ -95,7 +113,7 @@ pub fn set_mtu(name: &str, mtu: u32) -> Result<(), String> {
 
 #[cfg(not(windows))]
 #[allow(dead_code)]
-pub fn set_mtu(_name: &str, _mtu: u32) -> Result<(), String> {
+pub fn set_mtu(_interface_index: u32, _mtu: u32) -> Result<(), String> {
     Ok(())
 }
 

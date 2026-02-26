@@ -99,19 +99,21 @@ impl Spora for SporaService {
         let sessions = self.sessions.clone();
 
         tokio::spawn(async move {
-            // MTU callback: on Windows, updates the TUN adapter MTU directly via netsh.
+            // MTU callback: on Windows, updates the TUN adapter MTU via Win32 API.
             // Gated by `tun_ready` flag so early callbacks (before TUN creation) are deferred.
             let tun_name = "Spora";
             let tun_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let pending_mtu = Arc::new(std::sync::atomic::AtomicU16::new(0));
+            let tun_if_index = Arc::new(std::sync::atomic::AtomicU32::new(0));
             let mtu_callback: spora_core::transport::relay::MtuCallback = {
-                let name = tun_name.to_string();
                 let tun_ready = tun_ready.clone();
                 let pending_mtu = pending_mtu.clone();
+                let tun_if_index = tun_if_index.clone();
                 Some(Arc::new(move |mtu: u16| {
                     if tun_ready.load(Ordering::Relaxed) {
+                        let if_index = tun_if_index.load(Ordering::Relaxed);
                         info!("MTU callback: setting TUN MTU to {}", mtu);
-                        if let Err(e) = crate::tun::set_mtu(&name, mtu as u32) {
+                        if let Err(e) = crate::tun::set_mtu(if_index, mtu as u32) {
                             error!("Failed to set TUN MTU: {}", e);
                         }
                     } else {
@@ -176,11 +178,12 @@ impl Spora for SporaService {
             };
 
             // TUN is ready — enable MTU callback and apply any deferred MTU
+            tun_if_index.store(tun.interface_index(), Ordering::Relaxed);
             tun_ready.store(true, Ordering::Relaxed);
             let deferred_mtu = pending_mtu.load(Ordering::Relaxed);
             if deferred_mtu > 0 {
                 info!("Applying deferred MTU: {}", deferred_mtu);
-                if let Err(e) = crate::tun::set_mtu(tun_name, deferred_mtu as u32) {
+                if let Err(e) = crate::tun::set_mtu(tun.interface_index(), deferred_mtu as u32) {
                     error!("Failed to set deferred TUN MTU: {}", e);
                 }
             }
