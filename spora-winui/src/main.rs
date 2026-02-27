@@ -22,7 +22,16 @@ struct ActiveHandles {
 }
 
 fn main() {
-    env_logger::init();
+    let log_dir = log_dir();
+    std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("spora-winui.log"))
+        .expect("failed to open log file");
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .target(env_logger::Target::Pipe(Box::new(log_file)))
+        .init();
 
     // Launch spora-wincore (elevated on Windows, plain on Linux for dev)
     launch_wincore();
@@ -594,13 +603,30 @@ fn set_use_status(app: &AppWindow, id: &str, status: &str, active: bool) {
 
 // ── Launch spora-wincore ─────────────────────────────────────────────
 
+fn log_dir() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        // %LOCALAPPDATA%\Spora
+        std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into()))
+            .join("Spora")
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+}
+
 fn launch_wincore() {
     let exe_dir = std::env::current_exe()
         .unwrap()
         .parent()
         .unwrap()
         .to_path_buf();
-    let log_path = exe_dir.join("spora-wincore.log");
+    let log_path = log_dir().join("spora-wincore.log");
 
     #[cfg(windows)]
     {
