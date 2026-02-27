@@ -676,42 +676,82 @@ export component AppWindow inherits Window {
             }
 
             // URL field (use-connections only)
-            if !root.modal-is-share : Rectangle {
-                height: 48px;
-                border-radius: 10px;
-                background: white;
-                border-color: Palette.sage-dark;
-                border-width: 1px;
+            if !root.modal-is-share : VerticalLayout {
+                spacing: 6px;
 
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
+                Text {
+                    text: "URL";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Palette.text-muted;
+                }
 
-                    url-input := TextInput {
-                        text <=> root.modal-url;
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: white;
+                    border-color: Palette.sage-dark;
+                    border-width: 1px;
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+
+                        url-input := TextInput {
+                            text <=> root.modal-url;
+                            font-size: 14px;
+                            color: Palette.text-main;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Placeholder
+                    if root.modal-url == "" : Text {
+                        x: 14px;
+                        text: "https://spora.to/s/...";
                         font-size: 14px;
-                        color: Palette.text-main;
+                        color: Palette.text-muted;
                         vertical-alignment: center;
                     }
                 }
             }
 
             // Label field
-            Rectangle {
-                height: 48px;
-                border-radius: 10px;
-                background: white;
-                border-color: Palette.sage-dark;
-                border-width: 1px;
+            VerticalLayout {
+                spacing: 6px;
 
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
+                Text {
+                    text: "Name";
+                    font-size: 12px;
+                    font-weight: 600;
+                    color: Palette.text-muted;
+                }
 
-                    label-input := TextInput {
-                        text <=> root.modal-label;
+                Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: white;
+                    border-color: Palette.sage-dark;
+                    border-width: 1px;
+
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+
+                        label-input := TextInput {
+                            text <=> root.modal-label;
+                            font-size: 14px;
+                            color: Palette.text-main;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Placeholder
+                    if root.modal-label == "" : Text {
+                        x: 14px;
+                        text: "My connection";
                         font-size: 14px;
-                        color: Palette.text-main;
+                        color: Palette.text-muted;
                         vertical-alignment: center;
                     }
                 }
