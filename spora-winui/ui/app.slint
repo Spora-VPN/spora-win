@@ -204,66 +204,67 @@ export component AppWindow inherits Window {
                             border-radius: 12px;
                             background: Palette.card-bg;
 
-                            // Right-click to rename (behind buttons in z-order)
-                            TouchArea {
-                                pointer-event(ev) => {
-                                    if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
-                                        root.modal-id = conn.id;
-                                        root.modal-label = conn.label;
-                                        root.modal-is-share = true;
-                                        root.show-rename-modal = true;
-                                    }
-                                }
-                            }
-
                             HorizontalLayout {
                                 padding-left: 16px;
                                 padding-right: 12px;
                                 spacing: 12px;
-                                alignment: space-between;
 
-                                // Label + URL + status
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 3px;
+                                // Label + URL + status (right-click to rename)
+                                Rectangle {
                                     horizontal-stretch: 1;
 
-                                    Text {
-                                        text: conn.label;
-                                        font-size: 15px;
-                                        font-weight: 500;
-                                        color: Palette.text-main;
-                                        overflow: elide;
-                                    }
-
-                                    if conn.detail != "" : Text {
-                                        text: conn.detail;
-                                        font-size: 11px;
-                                        color: Palette.text-muted;
-                                        overflow: elide;
-                                    }
-
-                                    HorizontalLayout {
-                                        spacing: 6px;
-
-                                        Rectangle {
-                                            width: 8px;
-                                            height: 8px;
-                                            y: (parent.height - self.height) / 2;
-                                            border-radius: 4px;
-                                            background: conn.status == "sharing" ? Palette.green
-                                                      : conn.status == "starting" ? Palette.yellow
-                                                      : Palette.text-muted;
+                                    TouchArea {
+                                        pointer-event(ev) => {
+                                            if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
+                                                root.modal-id = conn.id;
+                                                root.modal-label = conn.label;
+                                                root.modal-is-share = true;
+                                                root.show-rename-modal = true;
+                                            }
                                         }
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
 
                                         Text {
-                                            text: conn.status == "sharing" ? "Sharing"
-                                                : conn.status == "starting" ? "Starting..."
-                                                : "Inactive";
-                                            font-size: 12px;
-                                            color: conn.status == "sharing" ? Palette.green
-                                                 : conn.status == "starting" ? Palette.yellow
-                                                 : Palette.text-muted;
+                                            text: conn.label;
+                                            font-size: 15px;
+                                            font-weight: 500;
+                                            color: Palette.text-main;
+                                            overflow: elide;
+                                        }
+
+                                        if conn.detail != "" : Text {
+                                            text: conn.detail;
+                                            font-size: 11px;
+                                            color: Palette.text-muted;
+                                            overflow: elide;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: 6px;
+
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                y: (parent.height - self.height) / 2;
+                                                border-radius: 4px;
+                                                background: conn.status == "sharing" ? Palette.green
+                                                          : conn.status == "starting" ? Palette.yellow
+                                                          : Palette.text-muted;
+                                            }
+
+                                            Text {
+                                                text: conn.status == "sharing" ? "Sharing"
+                                                    : conn.status == "starting" ? "Starting..."
+                                                    : "Inactive";
+                                                font-size: 12px;
+                                                color: conn.status == "sharing" ? Palette.green
+                                                     : conn.status == "starting" ? Palette.yellow
+                                                     : Palette.text-muted;
+                                            }
                                         }
                                     }
                                 }
@@ -298,16 +299,20 @@ export component AppWindow inherits Window {
                                     height: 32px;
                                     y: (parent.height - self.height) / 2;
                                     border-radius: 6px;
+                                    background: share-del-touch.has-hover ? Palette.orange.with-alpha(20%) : transparent;
 
-                                    Text {
-                                        text: "✕";
-                                        font-size: 14px;
-                                        color: Palette.text-muted;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    Path {
+                                        width: 14px;
+                                        height: 14px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        viewbox-width: 24;
+                                        viewbox-height: 24;
+                                        fill: share-del-touch.has-hover ? Palette.orange : Palette.text-muted;
+                                        commands: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12Z";
                                     }
 
-                                    TouchArea {
+                                    share-del-touch := TouchArea {
                                         clicked => {
                                             root.modal-id = conn.id;
                                             root.modal-label = conn.label;
@@ -433,66 +438,67 @@ export component AppWindow inherits Window {
                             border-radius: 12px;
                             background: Palette.card-bg;
 
-                            // Right-click to rename (behind buttons in z-order)
-                            TouchArea {
-                                pointer-event(ev) => {
-                                    if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
-                                        root.modal-id = conn.id;
-                                        root.modal-label = conn.label;
-                                        root.modal-is-share = false;
-                                        root.show-rename-modal = true;
-                                    }
-                                }
-                            }
-
                             HorizontalLayout {
                                 padding-left: 16px;
                                 padding-right: 12px;
                                 spacing: 12px;
-                                alignment: space-between;
 
-                                // Label + URL + status
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 3px;
+                                // Label + URL + status (right-click to rename)
+                                Rectangle {
                                     horizontal-stretch: 1;
 
-                                    Text {
-                                        text: conn.label;
-                                        font-size: 15px;
-                                        font-weight: 500;
-                                        color: Palette.text-main;
-                                        overflow: elide;
+                                    TouchArea {
+                                        pointer-event(ev) => {
+                                            if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
+                                                root.modal-id = conn.id;
+                                                root.modal-label = conn.label;
+                                                root.modal-is-share = false;
+                                                root.show-rename-modal = true;
+                                            }
+                                        }
                                     }
 
-                                    Text {
-                                        text: conn.detail;
-                                        font-size: 11px;
-                                        color: Palette.text-muted;
-                                        overflow: elide;
-                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 3px;
 
-                                    HorizontalLayout {
-                                        spacing: 6px;
-
-                                        Rectangle {
-                                            width: 8px;
-                                            height: 8px;
-                                            y: (parent.height - self.height) / 2;
-                                            border-radius: 4px;
-                                            background: conn.status == "connected" ? Palette.green
-                                                      : conn.status == "connecting" ? Palette.yellow
-                                                      : Palette.text-muted;
+                                        Text {
+                                            text: conn.label;
+                                            font-size: 15px;
+                                            font-weight: 500;
+                                            color: Palette.text-main;
+                                            overflow: elide;
                                         }
 
                                         Text {
-                                            text: conn.status == "connected" ? "Connected"
-                                                : conn.status == "connecting" ? "Connecting..."
-                                                : "Inactive";
-                                            font-size: 12px;
-                                            color: conn.status == "connected" ? Palette.green
-                                                 : conn.status == "connecting" ? Palette.yellow
-                                                 : Palette.text-muted;
+                                            text: conn.detail;
+                                            font-size: 11px;
+                                            color: Palette.text-muted;
+                                            overflow: elide;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: 6px;
+
+                                            Rectangle {
+                                                width: 8px;
+                                                height: 8px;
+                                                y: (parent.height - self.height) / 2;
+                                                border-radius: 4px;
+                                                background: conn.status == "connected" ? Palette.green
+                                                          : conn.status == "connecting" ? Palette.yellow
+                                                          : Palette.text-muted;
+                                            }
+
+                                            Text {
+                                                text: conn.status == "connected" ? "Connected"
+                                                    : conn.status == "connecting" ? "Connecting..."
+                                                    : "Inactive";
+                                                font-size: 12px;
+                                                color: conn.status == "connected" ? Palette.green
+                                                     : conn.status == "connecting" ? Palette.yellow
+                                                     : Palette.text-muted;
+                                            }
                                         }
                                     }
                                 }
@@ -503,16 +509,20 @@ export component AppWindow inherits Window {
                                     height: 32px;
                                     y: (parent.height - self.height) / 2;
                                     border-radius: 6px;
+                                    background: use-del-touch.has-hover ? Palette.orange.with-alpha(20%) : transparent;
 
-                                    Text {
-                                        text: "✕";
-                                        font-size: 14px;
-                                        color: Palette.text-muted;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    Path {
+                                        width: 14px;
+                                        height: 14px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        viewbox-width: 24;
+                                        viewbox-height: 24;
+                                        fill: use-del-touch.has-hover ? Palette.orange : Palette.text-muted;
+                                        commands: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12Z";
                                     }
 
-                                    TouchArea {
+                                    use-del-touch := TouchArea {
                                         clicked => {
                                             root.modal-id = conn.id;
                                             root.modal-label = conn.label;
