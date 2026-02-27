@@ -14,6 +14,19 @@ use std::sync::{Arc, Mutex};
 
 slint::include_modules!();
 
+/// Convert a `spora:` URI or `https://spora.to/` URL to an `https://spora.to/` URL.
+fn convert_spora_url(input: &str) -> Option<String> {
+    if input.starts_with("https://spora.to/") {
+        Some(input.to_string())
+    } else if let Some(rest) = input.strip_prefix("spora:") {
+        Some(format!("https://spora.to/{rest}"))
+    } else {
+        None
+    }
+}
+
+const SINGLE_INSTANCE_PORT: u16 = 21453;
+
 /// Active session handle returned by the gRPC streaming RPCs.
 struct ActiveHandles {
     /// connection-id → gRPC handle
@@ -22,6 +35,33 @@ struct ActiveHandles {
 }
 
 fn main() {
+    // Parse URL from command-line args (e.g. "spora:s/abc?r=host:443")
+    let initial_url = std::env::args()
+        .skip(1)
+        .find_map(|arg| convert_spora_url(&arg));
+
+    // Single-instance enforcement: try to bind a known port.
+    // If we can't bind, another instance is running — send it the URL and exit.
+    let instance_listener = match std::net::TcpListener::bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+    {
+        Ok(listener) => {
+            listener.set_nonblocking(true).ok();
+            Some(listener)
+        }
+        Err(_) => {
+            // Another instance is running — forward the URL
+            if let Some(url) = &initial_url {
+                use std::io::Write;
+                if let Ok(mut stream) =
+                    std::net::TcpStream::connect(("127.0.0.1", SINGLE_INSTANCE_PORT))
+                {
+                    let _ = writeln!(stream, "{url}");
+                }
+            }
+            std::process::exit(0);
+        }
+    };
+
     let log_dir = log_dir();
     std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
     let log_file = std::fs::OpenOptions::new()
@@ -78,6 +118,92 @@ fn main() {
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                 }
+            }
+        });
+    }
+
+    // ── URL channel + incoming URL handling ─────────────────────────────
+    {
+        let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        // Send initial URL from command-line args
+        if let Some(url) = initial_url {
+            let _ = url_tx.send(url);
+        }
+
+        // Spawn TCP listener task to accept URLs from subsequent instances
+        if let Some(std_listener) = instance_listener {
+            let url_tx = url_tx.clone();
+            rt.spawn(async move {
+                let listener = tokio::net::TcpListener::from_std(std_listener)
+                    .expect("failed to convert TcpListener");
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else {
+                        continue;
+                    };
+                    let url_tx = url_tx.clone();
+                    tokio::spawn(async move {
+                        let mut buf = Vec::new();
+                        let mut reader = tokio::io::BufReader::new(stream);
+                        use tokio::io::AsyncBufReadExt;
+                        if reader.read_until(b'\n', &mut buf).await.is_ok() {
+                            let line = String::from_utf8_lossy(&buf).trim().to_string();
+                            if let Some(url) = convert_spora_url(&line) {
+                                let _ = url_tx.send(url);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        // Spawn URL processor task
+        let client_for_url = client.clone();
+        let store_for_url = store.clone();
+        let handles_for_url = handles.clone();
+        let weak_for_url = app.as_weak();
+        let rt_handle = rt.handle().clone();
+        rt.spawn(async move {
+            while let Some(url) = url_rx.recv().await {
+                log::info!("Handling incoming URL: {url}");
+
+                // Wait for gRPC client to be ready
+                let grpc = loop {
+                    let lock = client_for_url.lock().unwrap().clone();
+                    if let Some(g) = lock {
+                        break g;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                };
+
+                // Add to store
+                let url_clone = url.clone();
+                let id = store_for_url
+                    .lock()
+                    .unwrap()
+                    .add_use("Imported link".to_string(), url_clone);
+
+                // Update UI: switch to Use tab, sync list, raise window
+                let weak = weak_for_url.clone();
+                let store2 = store_for_url.clone();
+                let handles2 = handles_for_url.clone();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.set_current_tab(1);
+                        sync_use_list(&app, &store2, &handles2);
+                        app.window().request_redraw();
+                    }
+                })
+                .ok();
+
+                // Start the connection
+                let id_clone = id.clone();
+                let store3 = store_for_url.clone();
+                let handles3 = handles_for_url.clone();
+                let weak3 = weak_for_url.clone();
+                rt_handle.spawn(async move {
+                    start_use(grpc, id_clone, url, store3, handles3, weak3).await;
+                });
             }
         });
     }
