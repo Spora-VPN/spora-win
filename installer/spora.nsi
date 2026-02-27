@@ -12,7 +12,7 @@
 
 Name "Spora"
 OutFile "${OUTFILE_PATH}"
-InstallDir "$PROGRAMFILES\Spora"
+InstallDir "$PROGRAMFILES64\Spora"
 InstallDirRegKey HKLM "Software\Spora" "InstallDir"
 RequestExecutionLevel admin
 
