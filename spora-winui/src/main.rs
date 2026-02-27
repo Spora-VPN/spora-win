@@ -593,10 +593,14 @@ fn launch_wincore() {
 
     #[cfg(windows)]
     {
-        // On Windows, launch elevated via PowerShell Start-Process -Verb RunAs
-        // Redirect stdout+stderr to a log file for debugging.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // On Windows, launch elevated via PowerShell Start-Process -Verb RunAs.
+        // CREATE_NO_WINDOW hides the intermediate PowerShell console.
         let exe = exe_dir.join("spora-wincore.exe");
         let _ = Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
             .args([
                 "-Command",
                 &format!(
