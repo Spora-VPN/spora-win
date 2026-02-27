@@ -72,6 +72,13 @@ Section "Spora (required)" SecMain
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora" \
         "NoRepair" 1
 
+    ; Register spora: URI scheme
+    WriteRegStr HKLM "Software\Classes\spora" "" "URL:Spora"
+    WriteRegStr HKLM "Software\Classes\spora" "URL Protocol" ""
+    WriteRegStr HKLM "Software\Classes\spora\DefaultIcon" "" "$INSTDIR\spora.ico"
+    WriteRegStr HKLM "Software\Classes\spora\shell\open\command" "" \
+        '"$INSTDIR\spora-winui.exe" "%1"'
+
     ; Remember install dir
     WriteRegStr HKLM "Software\Spora" "InstallDir" "$INSTDIR"
 SectionEnd
@@ -105,6 +112,7 @@ Section "Uninstall"
     Delete "$DESKTOP\Spora.lnk"
 
     ; Remove registry keys
+    DeleteRegKey HKLM "Software\Classes\spora"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora"
     DeleteRegKey HKLM "Software\Spora"
 SectionEnd
