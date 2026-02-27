@@ -120,14 +120,25 @@ fn main() {
     // ── Save use callback ────────────────────────────────────────────
     {
         let store = store.clone();
+        let client = client.clone();
         let weak = app.as_weak();
         let handles = handles.clone();
+        let rt_handle = rt.handle().clone();
         app.on_save_use(move |label, url| {
-            let mut s = store.lock().unwrap();
-            s.add_use(label.to_string(), url.to_string());
+            let url = url.to_string();
+            let id = store.lock().unwrap().add_use(label.to_string(), url.clone());
             if let Some(app) = weak.upgrade() {
                 sync_use_list(&app, &store, &handles);
             }
+
+            let client_lock = client.lock().unwrap().clone();
+            let Some(grpc) = client_lock else { return };
+            let store = store.clone();
+            let handles = handles.clone();
+            let weak = weak.clone();
+            rt_handle.spawn(async move {
+                start_use(grpc, id, url, store, handles, weak).await;
+            });
         });
     }
 
