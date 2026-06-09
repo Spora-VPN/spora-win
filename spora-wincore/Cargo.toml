@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 spora-core = { path = "../spora-core" }
+base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.13"
 prost = "0.13"

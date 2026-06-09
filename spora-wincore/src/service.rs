@@ -39,20 +39,39 @@ impl Spora for SporaService {
         &self,
         request: Request<ShareRequest>,
     ) -> Result<Response<Self::ShareStream>, Status> {
-        let key = request.into_inner().key;
-        info!("gRPC Share(key={})", key);
+        // TODO(redesign): the gRPC contract still has a `key: String` field
+        // from the old design. Decode it as base64(identity.to_bytes()) and
+        // generate a fresh identity if empty. A proper proto update should
+        // change this to `bytes identity = 1`.
+        let raw_key = request.into_inner().key;
+        let identity = if raw_key.is_empty() {
+            spora_core::identity::Identity::generate()
+        } else {
+            use base64::Engine as _;
+            match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&raw_key) {
+                Ok(bytes) => match spora_core::identity::Identity::from_bytes(&bytes) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error!("gRPC Share: invalid persisted identity: {}", e);
+                        return Err(Status::invalid_argument(e));
+                    }
+                },
+                Err(e) => {
+                    error!("gRPC Share: identity not valid base64url: {}", e);
+                    return Err(Status::invalid_argument(e.to_string()));
+                }
+            }
+        };
+        info!("gRPC Share()");
 
         let (tx, rx) = mpsc::channel(16);
         let sessions = self.sessions.clone();
 
         tokio::spawn(async move {
             let config = spora_core::Config::default();
-            match spora_core::share(key, config).await {
+            match spora_core::share(identity, config).await {
                 Ok(session) => {
-                    let url = format!(
-                        "https://spora.to/s/{}?r={}",
-                        session.key, session.endpoint
-                    );
+                    let url = session.url.to_string();
                     let cancel = session.cancel.clone();
                     let task = session.task;
 
@@ -107,7 +126,7 @@ impl Spora for SporaService {
             let tun_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let pending_mtu = Arc::new(std::sync::atomic::AtomicU16::new(0));
             let tun_if_index = Arc::new(std::sync::atomic::AtomicU32::new(0));
-            let mtu_callback: spora_core::transport::relay::MtuCallback = {
+            let mtu_callback: spora_core::MtuCallback = {
                 let tun_ready = tun_ready.clone();
                 let pending_mtu = pending_mtu.clone();
                 let tun_if_index = tun_if_index.clone();
@@ -276,9 +295,10 @@ impl Spora for SporaService {
         &self,
         _request: Request<MakeSecretKeyRequest>,
     ) -> Result<Response<MakeSecretKeyResponse>, Status> {
-        let key = spora_core::make_secret_key();
-        info!("gRPC MakeSecretKey → {}", key);
-        Ok(Response::new(MakeSecretKeyResponse { key }))
+        // Legacy RPC kept for protocol compat; the new share() flow generates
+        // its identity internally and doesn't accept a pre-supplied key.
+        info!("gRPC MakeSecretKey (deprecated, ignored)");
+        Ok(Response::new(MakeSecretKeyResponse { key: String::new() }))
     }
 
     async fn shutdown(
