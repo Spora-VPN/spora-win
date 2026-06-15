@@ -40,7 +40,15 @@ impl GrpcClient {
         let resp = self
             .inner
             .clone()
-            .share(ShareRequest { key })
+            // Connection-log fields at their defaults: logging enabled in the
+            // service's default directory with default retention.
+            .share(ShareRequest {
+                key,
+                disable_conn_log: false,
+                conn_log_dir: String::new(),
+                conn_log_retention_days: 0,
+                conn_log_sessions_only: false,
+            })
             .await
             .map_err(|e| format!("Share RPC failed: {e}"))?;
         Ok(resp.into_inner())

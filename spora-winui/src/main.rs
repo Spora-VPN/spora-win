@@ -587,6 +587,14 @@ async fn start_share(
                 log::error!("Share error: {}", err.message);
                 break;
             }
+            share_event::Event::SessionEnded(ended) => {
+                log::info!("Share session ended: {}", ended.reason);
+            }
+            share_event::Event::ConnLogDegraded(d) => {
+                // Surfacing this in the UI is a follow-up; at minimum it must
+                // not be silent.
+                log::error!("Connection log degraded: {}", d.detail);
+            }
         }
     }
 

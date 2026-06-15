@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use log::{error, info};
+use log::{error, info, warn};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -43,7 +43,8 @@ impl Spora for SporaService {
         // from the old design. Decode it as base64(identity.to_bytes()) and
         // generate a fresh identity if empty. A proper proto update should
         // change this to `bytes identity = 1`.
-        let raw_key = request.into_inner().key;
+        let req = request.into_inner();
+        let raw_key = req.key;
         let identity = if raw_key.is_empty() {
             spora_core::identity::Identity::generate()
         } else {
@@ -62,13 +63,58 @@ impl Spora for SporaService {
                 }
             }
         };
-        info!("gRPC Share()");
+        // Connection logging is on by default (the sharer's IP fronts the
+        // client's traffic); the UI can opt out or override dir/retention.
+        let conn_log = if req.disable_conn_log {
+            None
+        } else {
+            let dir = if req.conn_log_dir.is_empty() {
+                default_connlog_dir(&identity)
+            } else {
+                std::path::PathBuf::from(&req.conn_log_dir)
+            };
+            let mut cl = spora_core::connlog::ConnLogConfig::in_dir(&dir);
+            if req.conn_log_retention_days > 0 {
+                cl.retention = std::time::Duration::from_secs(
+                    u64::from(req.conn_log_retention_days) * 86_400,
+                );
+            }
+            cl.log_destinations = !req.conn_log_sessions_only;
+            Some(cl)
+        };
+        match &conn_log {
+            Some(cl) => info!("gRPC Share() — connection log at {}", cl.dir.display()),
+            None => info!("gRPC Share() — connection log disabled"),
+        }
 
         let (tx, rx) = mpsc::channel(16);
         let sessions = self.sessions.clone();
 
+        // Forward the share-side lifecycle events the UI cares about. The
+        // hook must be non-blocking, so a full stream buffer drops the event.
+        let event_tx = tx.clone();
+        let event_hook: spora_core::EventHook = Some(Arc::new(move |ev| {
+            let mapped = match ev {
+                spora_core::TunnelEvent::SessionEnded { reason } => {
+                    share_event::Event::SessionEnded(ShareSessionEnded { reason })
+                }
+                spora_core::TunnelEvent::ConnLogDegraded { detail } => {
+                    share_event::Event::ConnLogDegraded(ShareConnLogDegraded { detail })
+                }
+                _ => return,
+            };
+            if event_tx.try_send(Ok(ShareEvent { event: Some(mapped) })).is_err() {
+                // ConnLogDegraded in particular must not vanish silently.
+                warn!("gRPC Share: event stream full or gone, dropping lifecycle event");
+            }
+        }));
+
         tokio::spawn(async move {
-            let config = spora_core::Config::default();
+            let config = spora_core::Config {
+                conn_log,
+                event_hook,
+                ..spora_core::Config::default()
+            };
             match spora_core::share(identity, config).await {
                 Ok(session) => {
                     let url = session.url.to_string();
@@ -311,6 +357,25 @@ impl Spora for SporaService {
     }
 }
 
+/// Default connection-log directory:
+/// `%PROGRAMDATA%\Spora\connlog\<routing_key_hex>\`. Per-identity so two
+/// shares with different identities never interleave their logs. Kept
+/// cfg-portable (plain env lookup, no Win32) so the crate still builds and
+/// runs share-side tests on Linux.
+fn default_connlog_dir(identity: &spora_core::identity::Identity) -> std::path::PathBuf {
+    let program_data =
+        std::env::var("ProgramData").unwrap_or_else(|_| r"C:\ProgramData".to_string());
+    let rk_hex: String = identity
+        .routing_key
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    std::path::PathBuf::from(program_data)
+        .join("Spora")
+        .join("connlog")
+        .join(rk_hex)
+}
+
 /// Set up routing: exclude the relay host via the original gateway, then add a default
 /// route through the TUN adapter. This is the Windows equivalent of Android's
 /// VpnService.protect() + addRoute("0.0.0.0/0").
@@ -319,30 +384,35 @@ fn setup_routes(
     url_str: &str,
     tun: &TunDevice,
 ) -> Result<(), String> {
-    // Extract relay host IP from URL (?r=host:port)
-    let url = Url::parse(url_str).map_err(|e| format!("invalid URL: {}", e))?;
-    let relay = url
-        .query_pairs()
-        .find(|(k, _)| k == "r")
-        .map(|(_, v)| v.into_owned())
-        .ok_or("URL missing ?r= parameter")?;
-    let (relay_host, _) = relay
-        .rsplit_once(':')
-        .ok_or("invalid ?r= format")?;
-
     use std::net::ToSocketAddrs;
 
-    // Resolve relay hostname to IP if needed
-    let relay_ip = if relay_host.parse::<std::net::IpAddr>().is_ok() {
-        relay_host.to_string()
-    } else {
-        let addr = format!("{}:0", relay_host)
-            .to_socket_addrs()
-            .map_err(|e| format!("failed to resolve relay host '{}': {}", relay_host, e))?
-            .find(|a| a.is_ipv4())
-            .ok_or_else(|| format!("no IPv4 address for relay host '{}'", relay_host))?;
-        addr.ip().to_string()
-    };
+    // Parse every relay endpoint out of the URL (a share URL can carry
+    // several; a hostname may resolve to more than one IPv4). Each must be
+    // excluded from the tunnel so its traffic reaches the real NIC, or the
+    // relay path loops through the VPN it bootstraps.
+    let url = Url::parse(url_str).map_err(|e| format!("invalid URL: {}", e))?;
+    let token =
+        spora_core::identity::Token::from_url(&url).map_err(|e| format!("invalid share URL: {}", e))?;
+    let mut relay_ips: Vec<String> = Vec::new();
+    for relay in &token.relays {
+        if let Ok(ip) = relay.host.parse::<std::net::IpAddr>() {
+            // Windows split-tunnel routing here is IPv4-only; a v6 relay
+            // literal needs a v6 route exclusion this code doesn't do yet.
+            if ip.is_ipv4() {
+                relay_ips.push(ip.to_string());
+            } else {
+                info!("skipping IPv6 relay {} (v6 route exclusion unimplemented)", ip);
+            }
+        } else {
+            match format!("{}:0", relay.host).to_socket_addrs() {
+                Ok(addrs) => relay_ips.extend(addrs.filter(|a| a.is_ipv4()).map(|a| a.ip().to_string())),
+                Err(e) => info!("failed to resolve relay host '{}': {}", relay.host, e),
+            }
+        }
+    }
+    if relay_ips.is_empty() {
+        return Err("no IPv4 relay address resolved from the share URL".into());
+    }
 
     let gw = crate::route::detect_default_gateway()?;
     info!(
@@ -352,8 +422,10 @@ fn setup_routes(
 
     let tun_if = tun.interface_index();
 
-    // Exclude relay IP so its traffic goes through the real NIC (prevents routing loop)
-    routes.exclude_host(&relay_ip, &gw.gateway, gw.interface_index)?;
+    // Exclude each relay IP so its traffic goes through the real NIC (prevents routing loop)
+    for relay_ip in &relay_ips {
+        routes.exclude_host(relay_ip, &gw.gateway, gw.interface_index)?;
+    }
 
     // Exclude STUN server so direct upgrade probes don't loop through tunnel
     if let Ok(addrs) = ("stun.l.google.com", 19302u16).to_socket_addrs() {

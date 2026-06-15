@@ -15,6 +15,16 @@ service Spora {
 
 message ShareRequest {
   string key = 1;
+  // Connection-log control. Logging is ENABLED by default; when these fields
+  // are unset the log lands at %PROGRAMDATA%\Spora\connlog\<routing_key_hex>\.
+  bool disable_conn_log = 2;
+  // Override the log directory (used as-is). Empty = the default above.
+  string conn_log_dir = 3;
+  // Retention in days. 0 = default (90).
+  uint32 conn_log_retention_days = 4;
+  // Log sessions only (who was connected and when) without per-flow
+  // destination records.
+  bool conn_log_sessions_only = 5;
 }
 
 message ShareEvent {
@@ -22,6 +32,8 @@ message ShareEvent {
     ShareReady ready = 1;
     ShareConnected connected = 2;
     ShareError error = 3;
+    ShareSessionEnded session_ended = 4;
+    ShareConnLogDegraded conn_log_degraded = 5;
   }
 }
 
@@ -34,6 +46,18 @@ message ShareConnected {}
 
 message ShareError {
   string message = 1;
+}
+
+// The active peer session ended (replaced by a new peer, cancelled, or its
+// transport closed). The share keeps running and accepts the next peer.
+message ShareSessionEnded {
+  string reason = 1;
+}
+
+// The connection log could not be written (disk full, IO error). The tunnel
+// is unaffected; the gap is recorded in the log itself once writing recovers.
+message ShareConnLogDegraded {
+  string detail = 1;
 }
 
 // --- Connect ---
