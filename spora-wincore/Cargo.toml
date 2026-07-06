@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-spora-core = { path = "../spora-core" }
+# Sibling checkout of the main spora repo (this repo was extracted from it).
+spora-core = { path = "../../spora/spora-core" }
 base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.13"
