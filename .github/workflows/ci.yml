@@ -19,7 +19,7 @@ env:
 jobs:
   # Cheap early gate: everything outside cfg(windows) compiles and passes
   # clippy on Linux (all Windows-only deps are cfg-gated). Catches core-API
-  # drift and cross-platform breakage in ~2 min without a Windows runner.
+  # drift and cross-platform breakage without a Windows runner.
   linux-check:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -39,51 +39,37 @@ jobs:
       # Sibling checkout so the path dependency ../../spora/spora-core
       # resolves; pinned via .github/core-ref for reproducibility.
       - uses: actions/checkout@v7
-        id: corecheckout
         with:
           repository: atereshkin/spora
           ref: ${{ steps.core.outputs.ref }}
           path: spora
 
       - uses: dtolnay/rust-toolchain@stable
-        id: toolchain
         with:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
-        id: cache
         with:
           workspaces: spora-win
           cache-on-failure: true
 
       - uses: arduino/setup-protoc@v3
-        id: protoc
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Slint's Linux font stack (yeslogic-fontconfig-sys) needs the system
+      # fontconfig headers at build time.
+      - name: Install fontconfig headers
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig-dev
+
       # NOT --locked: the path-dep core's dependency tree may legitimately
       # move within the pinned ref's Cargo.toml ranges.
-      - run: |
-          set -o pipefail
-          cargo check --workspace 2>&1 | tee /tmp/check.log
-        id: check
+      - run: cargo check --workspace
       - run: cargo clippy --workspace
-        id: clippy
-
-      - name: Push check log
-        if: always()
-        run: |
-          cp /tmp/check.log . 2>/dev/null || true
-          git config user.name ci
-          git config user.email ci@invalid
-          git add -f check.log && git commit -qm "check log ${{ github.run_id }}" \
-            && git push -f origin HEAD:refs/heads/ci-log/${{ github.run_id }} || true
 
       - name: Report result
         if: always()
-        run: >-
-          git push -f origin
-          HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}--co.${{ steps.corecheckout.outcome }}--tc.${{ steps.toolchain.outcome }}--ca.${{ steps.cache.outcome }}--pr.${{ steps.protoc.outcome }}--ck.${{ steps.check.outcome }}--cl.${{ steps.clippy.outcome }}
+        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}
 
   # The real build: compiles the cfg(windows) code (service, wintun, named
   # pipes) natively with msvc. wintun.dll is loaded at runtime, so building
