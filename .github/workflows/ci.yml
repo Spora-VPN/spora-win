@@ -63,10 +63,21 @@ jobs:
 
       # NOT --locked: the path-dep core's dependency tree may legitimately
       # move within the pinned ref's Cargo.toml ranges.
-      - run: cargo check --workspace
+      - run: |
+          set -o pipefail
+          cargo check --workspace 2>&1 | tee /tmp/check.log
         id: check
       - run: cargo clippy --workspace
         id: clippy
+
+      - name: Push check log
+        if: always()
+        run: |
+          cp /tmp/check.log . 2>/dev/null || true
+          git config user.name ci
+          git config user.email ci@invalid
+          git add -f check.log && git commit -qm "check log ${{ github.run_id }}" \
+            && git push -f origin HEAD:refs/heads/ci-log/${{ github.run_id }} || true
 
       - name: Report result
         if: always()
