@@ -39,32 +39,40 @@ jobs:
       # Sibling checkout so the path dependency ../../spora/spora-core
       # resolves; pinned via .github/core-ref for reproducibility.
       - uses: actions/checkout@v7
+        id: corecheckout
         with:
           repository: atereshkin/spora
           ref: ${{ steps.core.outputs.ref }}
           path: spora
 
       - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
         with:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
+        id: cache
         with:
           workspaces: spora-win
           cache-on-failure: true
 
       - uses: arduino/setup-protoc@v3
+        id: protoc
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # NOT --locked: the path-dep core's dependency tree may legitimately
       # move within the pinned ref's Cargo.toml ranges.
       - run: cargo check --workspace
+        id: check
       - run: cargo clippy --workspace
+        id: clippy
 
       - name: Report result
         if: always()
-        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}
+        run: >-
+          git push -f origin
+          HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}--co.${{ steps.corecheckout.outcome }}--tc.${{ steps.toolchain.outcome }}--ca.${{ steps.cache.outcome }}--pr.${{ steps.protoc.outcome }}--ck.${{ steps.check.outcome }}--cl.${{ steps.clippy.outcome }}
 
   # The real build: compiles the cfg(windows) code (service, wintun, named
   # pipes) natively with msvc. wintun.dll is loaded at runtime, so building
