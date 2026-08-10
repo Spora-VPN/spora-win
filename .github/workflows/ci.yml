@@ -1,0 +1,113 @@
+name: ci
+
+on:
+  push:
+    branches: [main, ci]
+  pull_request:
+
+# Each job ends by force-pushing an empty ref whose NAME encodes
+# run id + job + status (ci-result/<run>/<job>/<status>). This repo is
+# private and the dev machine has no GitHub API token, so `git ls-remote`
+# over SSH is how CI outcomes are read from there. The refs are ephemeral;
+# delete them freely.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cheap early gate: everything outside cfg(windows) compiles and passes
+  # clippy on Linux (all Windows-only deps are cfg-gated). Catches core-API
+  # drift and cross-platform breakage in ~2 min without a Windows runner.
+  linux-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: spora-win
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spora-win
+          persist-credentials: true
+
+      - name: Read pinned core ref
+        id: core
+        run: echo "ref=$(grep -v '^#' .github/core-ref | head -1)" >> "$GITHUB_OUTPUT"
+
+      # Sibling checkout so the path dependency ../../spora/spora-core
+      # resolves; pinned via .github/core-ref for reproducibility.
+      - uses: actions/checkout@v7
+        with:
+          repository: atereshkin/spora
+          ref: ${{ steps.core.outputs.ref }}
+          path: spora
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spora-win
+          cache-on-failure: true
+
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # NOT --locked: the path-dep core's dependency tree may legitimately
+      # move within the pinned ref's Cargo.toml ranges.
+      - run: cargo check --workspace
+      - run: cargo clippy --workspace
+
+      - name: Report result
+        if: always()
+        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}
+
+  # The real build: compiles the cfg(windows) code (service, wintun, named
+  # pipes) natively with msvc. wintun.dll is loaded at runtime, so building
+  # and clippy need no driver bits.
+  windows-build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: spora-win
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spora-win
+          persist-credentials: true
+
+      - name: Read pinned core ref
+        id: core
+        shell: bash
+        run: echo "ref=$(grep -v '^#' .github/core-ref | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: atereshkin/spora
+          ref: ${{ steps.core.outputs.ref }}
+          path: spora
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spora-win
+          cache-on-failure: true
+
+      - uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: cargo build --workspace
+      - run: cargo clippy --workspace
+
+      - name: Report result
+        if: always()
+        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}

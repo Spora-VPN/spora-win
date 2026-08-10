@@ -1,0 +1,5 @@
+# Ref (tag, branch, or sha) of github.com/atereshkin/spora that CI builds
+# against. spora-wincore depends on the core via a path dependency
+# (../../spora/spora-core), so ci.yml checks the core repo out as a sibling
+# at exactly this ref. Bump it when the client needs newer core APIs.
+v0.1.1
