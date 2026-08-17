@@ -5389,6 +5389,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "url",
+ "windows-service",
  "windows-sys 0.52.0",
  "wintun",
 ]
@@ -5400,6 +5401,7 @@ dependencies = [
  "arboard",
  "directories",
  "env_logger",
+ "hyper-util",
  "log",
  "prost",
  "serde",
@@ -5409,7 +5411,9 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+ "tower",
  "uuid",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6552,6 +6556,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6726,6 +6736,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d24d6bcc7f734a4091ecf8d7a64c5f7d7066f45585c1861eba06449909609c8a"
+dependencies = [
+ "bitflags 2.10.0",
+ "widestring",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

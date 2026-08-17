@@ -22,11 +22,8 @@ pub struct SporaService {
 }
 
 impl SporaService {
-    pub fn new(shutdown: Arc<tokio::sync::Notify>) -> Self {
-        Self {
-            sessions: Arc::new(SessionStore::new()),
-            shutdown,
-        }
+    pub fn new(sessions: Arc<SessionStore>, shutdown: Arc<tokio::sync::Notify>) -> Self {
+        Self { sessions, shutdown }
     }
 }
 
@@ -121,7 +118,19 @@ impl Spora for SporaService {
                     let cancel = session.cancel.clone();
                     let task = session.task;
 
-                    let handle = sessions.insert_share(ShareSession { cancel, task });
+                    let handle = match sessions.insert_share(ShareSession {
+                        cancel: cancel.clone(),
+                        task,
+                    }) {
+                        Some(h) => h,
+                        None => {
+                            // Service is shutting down — stop the share we just
+                            // brought up and let the stream close.
+                            info!("gRPC Share: service shutting down, aborting new share");
+                            cancel.cancel();
+                            return;
+                        }
+                    };
 
                     let _ = tx
                         .send(Ok(ShareEvent {
@@ -132,8 +141,21 @@ impl Spora for SporaService {
                         }))
                         .await;
 
-                    // Hold stream open until client disconnects or calls StopShare.
-                    tx.closed().await;
+                    // The event stream is the session's lease: the service is
+                    // long-lived, so when the UI goes away (clean exit or
+                    // crash) the share must stop rather than leak. When
+                    // StopShare or service shutdown cancels the session, the
+                    // stream closes so the client sees it end.
+                    tokio::select! {
+                        _ = tx.closed() => {
+                            if let Some(s) = sessions.remove_share(handle) {
+                                info!("share {} client disconnected — stopping share", handle);
+                                s.cancel.cancel();
+                                s.task.abort();
+                            }
+                        }
+                        _ = cancel.cancelled() => {}
+                    }
                 }
                 Err(e) => {
                     let _ = tx
@@ -227,11 +249,19 @@ impl Spora for SporaService {
                     // On non-Windows, register session without tunnel so Share-side testing works.
                     let routes = RouteManager::new();
                     let task = tokio::spawn(async {});
-                    let handle = sessions.insert_connect(ConnectSession {
+                    let session_cancel = cancel.clone();
+                    let handle = match sessions.insert_connect(ConnectSession {
                         cancel,
                         task,
                         routes,
-                    });
+                    }) {
+                        Some(h) => h,
+                        None => {
+                            info!("gRPC Connect: service shutting down, aborting new session");
+                            session_cancel.cancel();
+                            return;
+                        }
+                    };
                     let _ = tx
                         .send(Ok(ConnectEvent {
                             event: Some(connect_event::Event::Connected(ConnectConnected {
@@ -239,7 +269,16 @@ impl Spora for SporaService {
                             })),
                         }))
                         .await;
-                    tx.closed().await;
+                    tokio::select! {
+                        _ = tx.closed() => {
+                            if let Some(s) = sessions.remove_connect(handle) {
+                                info!("connect {} client disconnected — tearing down", handle);
+                                s.cancel.cancel();
+                                s.task.abort();
+                            }
+                        }
+                        _ = session_cancel.cancelled() => {}
+                    }
                     return;
                 }
             };
@@ -281,11 +320,22 @@ impl Spora for SporaService {
                 }
             });
 
-            let handle = sessions.insert_connect(ConnectSession {
+            let session_cancel = cancel.clone();
+            let handle = match sessions.insert_connect(ConnectSession {
                 cancel,
                 task,
                 routes,
-            });
+            }) {
+                Some(h) => h,
+                None => {
+                    // Service is shutting down. Dropping the session above
+                    // dropped its RouteManager, already removing the routes we
+                    // just installed; cancel the tunnel task and end.
+                    info!("gRPC Connect: service shutting down, tearing down new tunnel");
+                    session_cancel.cancel();
+                    return;
+                }
+            };
 
             let _ = tx
                 .send(Ok(ConnectEvent {
@@ -295,8 +345,20 @@ impl Spora for SporaService {
                 }))
                 .await;
 
-            // Hold stream open until client disconnects
-            tx.closed().await;
+            // Tie the tunnel to the event stream (see share() above): a UI
+            // crash must tear down the default route, not leave the machine
+            // routing into a dead tunnel. Dropping the session also drops its
+            // RouteManager, which removes the routes it added.
+            tokio::select! {
+                _ = tx.closed() => {
+                    if let Some(s) = sessions.remove_connect(handle) {
+                        info!("connect {} client disconnected — tearing down tunnel", handle);
+                        s.cancel.cancel();
+                        s.task.abort();
+                    }
+                }
+                _ = session_cancel.cancelled() => {}
+            }
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -351,8 +413,23 @@ impl Spora for SporaService {
         &self,
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
-        info!("gRPC Shutdown — exiting");
-        self.shutdown.notify_one();
+        // On Windows the process is a Windows service whose lifecycle belongs
+        // to the SCM: a clean self-exit would report SERVICE_STOPPED (so the
+        // failure/restart actions never fire) and leave every user's tunnels
+        // down until reboot. The pipe admits unelevated interactive users, so
+        // honoring this RPC would let any local process stop the machine-wide
+        // VPN. Ignore it — the UI on Windows never calls it. Stop the service
+        // via the SCM (`sc stop Spora` / Services) instead.
+        #[cfg(windows)]
+        {
+            warn!("gRPC Shutdown ignored on Windows — service is stopped via the SCM");
+            let _ = &self.shutdown;
+        }
+        #[cfg(not(windows))]
+        {
+            info!("gRPC Shutdown — exiting");
+            self.shutdown.notify_one();
+        }
         Ok(Response::new(ShutdownResponse {}))
     }
 }

@@ -9,7 +9,6 @@ use store::Store;
 
 use slint::Model;
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 slint::include_modules!();
@@ -32,6 +31,28 @@ struct ActiveHandles {
     /// connection-id → gRPC handle
     share_handles: HashMap<String, i32>,
     use_handles: HashMap<String, i32>,
+    /// connection-id → generation. Bumped each time a start_share/start_use
+    /// task begins for that id; a task only touches shared UI/handle state on
+    /// teardown if it is still the current generation. Prevents a superseded
+    /// task (e.g. after a quick stop→start re-toggle, now that the service
+    /// closes cancelled streams) from clobbering the newer session's state.
+    share_gen: HashMap<String, u64>,
+    use_gen: HashMap<String, u64>,
+}
+
+impl ActiveHandles {
+    /// Bumps and returns the current generation for a share id.
+    fn bump_share_gen(&mut self, id: &str) -> u64 {
+        let g = self.share_gen.entry(id.to_string()).or_insert(0);
+        *g += 1;
+        *g
+    }
+
+    fn bump_use_gen(&mut self, id: &str) -> u64 {
+        let g = self.use_gen.entry(id.to_string()).or_insert(0);
+        *g += 1;
+        *g
+    }
 }
 
 fn main() {
@@ -73,7 +94,11 @@ fn main() {
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .init();
 
-    // Launch spora-wincore (elevated on Windows, plain on Linux for dev)
+    // On Windows, spora-wincore runs as the "Spora" Windows service
+    // (installed and started by the installer) — nothing to launch, the
+    // connect loop below reaches it over its named pipe. On Linux dev
+    // builds, spawn it as a plain child process.
+    #[cfg(not(windows))]
     launch_wincore();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -88,6 +113,8 @@ fn main() {
     let handles = Arc::new(Mutex::new(ActiveHandles {
         share_handles: HashMap::new(),
         use_handles: HashMap::new(),
+        share_gen: HashMap::new(),
+        use_gen: HashMap::new(),
     }));
 
     // Initial UI sync from store
@@ -450,7 +477,10 @@ fn main() {
 
     app.run().unwrap();
 
-    // UI closed — shut down wincore
+    // UI closed. On Windows the service keeps running; exiting drops our
+    // gRPC streams, which makes wincore stop the sessions this UI started.
+    // On Linux dev builds we spawned wincore ourselves, so stop it too.
+    #[cfg(not(windows))]
     rt.block_on(async {
         let grpc = client.lock().unwrap().clone();
         if let Some(grpc) = grpc {
@@ -523,6 +553,10 @@ async fn start_share(
     handles: Arc<Mutex<ActiveHandles>>,
     weak: slint::Weak<AppWindow>,
 ) {
+    // Claim the current generation for this id so a superseded run of this
+    // task doesn't clobber a newer session's UI state on teardown.
+    let my_gen = handles.lock().unwrap().bump_share_gen(&id);
+
     // Set starting status
     {
         let weak = weak.clone();
@@ -598,8 +632,15 @@ async fn start_share(
         }
     }
 
-    // Stream ended — mark inactive
-    handles.lock().unwrap().share_handles.remove(&id);
+    // Stream ended — mark inactive, unless a newer start_share for this id has
+    // superseded us (in which case leave its state alone).
+    {
+        let mut h = handles.lock().unwrap();
+        if h.share_gen.get(&id).copied() != Some(my_gen) {
+            return;
+        }
+        h.share_handles.remove(&id);
+    }
     let weak = weak.clone();
     let store = store.clone();
     let handles = handles.clone();
@@ -621,6 +662,9 @@ async fn start_use(
     handles: Arc<Mutex<ActiveHandles>>,
     weak: slint::Weak<AppWindow>,
 ) {
+    // Claim the current generation (see start_share).
+    let my_gen = handles.lock().unwrap().bump_use_gen(&id);
+
     // Set connecting status
     {
         let weak = weak.clone();
@@ -679,8 +723,15 @@ async fn start_use(
         }
     }
 
-    // Stream ended — mark inactive
-    handles.lock().unwrap().use_handles.remove(&id);
+    // Stream ended — mark inactive, unless a newer start_use for this id has
+    // superseded us.
+    {
+        let mut h = handles.lock().unwrap();
+        if h.use_gen.get(&id).copied() != Some(my_gen) {
+            return;
+        }
+        h.use_handles.remove(&id);
+    }
     let weak = weak.clone();
     let store = store.clone();
     let handles = handles.clone();
@@ -735,7 +786,10 @@ fn set_use_status(app: &AppWindow, id: &str, status: &str, active: bool) {
     }
 }
 
-// ── Launch spora-wincore ─────────────────────────────────────────────
+// ── Launch spora-wincore (Linux dev builds only) ─────────────────────
+//
+// On Windows wincore runs as the "Spora" Windows service; its logs go to
+// %ProgramData%\Spora\spora-wincore.log.
 
 fn log_dir() -> std::path::PathBuf {
     #[cfg(windows)]
@@ -754,6 +808,7 @@ fn log_dir() -> std::path::PathBuf {
     }
 }
 
+#[cfg(not(windows))]
 fn launch_wincore() {
     let exe_dir = std::env::current_exe()
         .unwrap()
@@ -762,38 +817,14 @@ fn launch_wincore() {
         .to_path_buf();
     let log_path = log_dir().join("spora-wincore.log");
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-        // On Windows, launch elevated via PowerShell Start-Process -Verb RunAs.
-        // CREATE_NO_WINDOW hides the intermediate PowerShell console.
-        let exe = exe_dir.join("spora-wincore.exe");
-        let _ = Command::new("powershell")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args([
-                "-Command",
-                &format!(
-                    "Start-Process -FilePath '{}' -Verb RunAs -WindowStyle Hidden -ArgumentList '--log-file','{}'",
-                    exe.display(),
-                    log_path.display(),
-                ),
-            ])
+    // Launch from the same target directory
+    let exe = exe_dir.join("spora-wincore");
+    if exe.exists() {
+        let _ = std::process::Command::new(&exe)
+            .args(["--log-file", &log_path.to_string_lossy()])
             .spawn();
-    }
-
-    #[cfg(not(windows))]
-    {
-        // On Linux (dev), launch from same target directory
-        let exe = exe_dir.join("spora-wincore");
-        if exe.exists() {
-            let _ = Command::new(&exe)
-                .args(["--log-file", &log_path.to_string_lossy()])
-                .spawn();
-        } else {
-            log::warn!("spora-wincore not found at {}, skipping launch", exe.display());
-        }
+    } else {
+        log::warn!("spora-wincore not found at {}, skipping launch", exe.display());
     }
 
     log::info!("Wincore log file: {}", log_path.display());

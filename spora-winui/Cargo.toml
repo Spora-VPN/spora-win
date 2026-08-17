@@ -16,6 +16,17 @@ env_logger = "0.11"
 uuid = { version = "1", features = ["v4"] }
 arboard = "3"
 
+[target.'cfg(windows)'.dependencies]
+# Named-pipe connector for the gRPC channel to the wincore service.
+tower = { version = "0.5", features = ["util"] }
+hyper-util = "0.1"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    # CreateFileW is gated on Win32_Security (it takes a SECURITY_ATTRIBUTES).
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+] }
+
 [build-dependencies]
 slint-build = "1.15"
 tonic-build = "0.13"
