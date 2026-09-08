@@ -33,6 +33,19 @@ impl TunDevice {
             .get_adapter_index()
             .map_err(|e| format!("failed to get adapter index: {}", e))?;
 
+        // Interface settings BEFORE the address: `configure_interface` turns
+        // duplicate address detection off, and that only covers addresses
+        // added afterwards. With DAD on, the fresh address sits in the
+        // Tentative state for ~3 s (three ARP probes nobody answers on a
+        // tunnel); once the default route makes this adapter the DNS
+        // client's first-choice interface, every name lookup on the machine
+        // fails instantly for the rest of that window — the query is built on
+        // this interface, finds no usable source address, and the DNS client
+        // does not fall back to the uplink. spora-core's STUN lookups run
+        // ~80 ms after the relay session is up, inside it. Same fix as the
+        // CLI's `vpn::windows` backend (WireGuard for Windows does likewise).
+        configure_interface(interface_index, mtu)?;
+
         // Configure IP address via Win32 API
         unsafe {
             use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -52,9 +65,6 @@ impl TunDevice {
                 return Err(format!("CreateUnicastIpAddressEntry failed: error {}", ret));
             }
         }
-
-        // Set MTU via Win32 API
-        set_mtu(interface_index, mtu)?;
 
         let session = std::sync::Arc::new(
             adapter
@@ -87,6 +97,17 @@ impl TunDevice {
 /// (e.g. from an MTU callback closure).
 #[cfg(windows)]
 pub fn set_mtu(interface_index: u32, mtu: u32) -> Result<(), String> {
+    configure_interface(interface_index, mtu)?;
+    info!("TUN MTU updated to {}", mtu);
+    Ok(())
+}
+
+/// Set the IPv4 interface MTU and disable duplicate address detection. DAD is
+/// meaningless on a point-to-point tunnel and, left on, keeps a new address
+/// Tentative for ~3 s during which name resolution on the whole machine fails
+/// once the tunnel's default route is in (see `TunDevice::create`).
+#[cfg(windows)]
+fn configure_interface(interface_index: u32, mtu: u32) -> Result<(), String> {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetIpInterfaceEntry, MIB_IPINTERFACE_ROW, SetIpInterfaceEntry,
     };
@@ -101,13 +122,13 @@ pub fn set_mtu(interface_index: u32, mtu: u32) -> Result<(), String> {
             return Err(format!("GetIpInterfaceEntry failed: error {}", ret));
         }
         row.NlMtu = mtu;
+        row.DadTransmits = 0;
         row.SitePrefixLength = 0; // required for IPv4, see SetIpInterfaceEntry docs
         let ret = SetIpInterfaceEntry(&mut row);
         if ret != 0 {
             return Err(format!("SetIpInterfaceEntry failed: error {}", ret));
         }
     }
-    info!("TUN MTU updated to {}", mtu);
     Ok(())
 }
 
