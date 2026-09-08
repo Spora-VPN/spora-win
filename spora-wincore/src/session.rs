@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-
-use crate::route::RouteManager;
 
 static NEXT_HANDLE: AtomicI32 = AtomicI32::new(1);
 
@@ -17,7 +15,10 @@ pub struct ShareSession {
 pub struct ConnectSession {
     pub cancel: CancellationToken,
     pub task: JoinHandle<()>,
-    pub routes: RouteManager,
+    /// The host integration (adapter, routes, resolver); `None` when the
+    /// session runs without a tunnel (Linux dev builds). Dropping it undoes
+    /// every host change.
+    pub vpn: Option<Arc<spora_vpn::Session>>,
 }
 
 /// State behind a single lock so an insert and `shutdown_all` can never
@@ -78,9 +79,10 @@ impl SessionStore {
     }
 
     /// Marks the store closed (so future inserts refuse) and cancels every
-    /// live session. Dropping a `ConnectSession` drops its `RouteManager`,
-    /// which removes the routes it added. Sessions are dropped outside the
-    /// lock because `RouteManager`'s drop touches the Win32 routing table.
+    /// live session. Dropping a `ConnectSession` drops its spora-vpn session,
+    /// which undoes the routes and resolver it installed and closes the
+    /// adapter. Sessions are dropped outside the lock because that touches
+    /// the host's routing table and resolver settings.
     pub fn shutdown_all(&self) {
         let (shares, connects) = {
             let mut inner = self.inner.lock().unwrap();

@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 # Sibling checkout of the main spora repo (this repo was extracted from it).
 spora-core = { path = "../../spora/spora-core" }
+# Client-side host integration (wintun adapter, routes, resolver, MTU,
+# outer-socket bypass) — the same crate `spora use` is built on.
+spora-vpn = { path = "../../spora/spora-vpn" }
 base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.13"
@@ -18,13 +21,11 @@ tokio-stream = "0.1"
 tokio-util = "0.7"
 
 [target.'cfg(windows)'.dependencies]
-wintun = "0.5"
 windows-service = "0.7"
+# The control pipe's DACL (src/pipe.rs). The tunnel adapter, routes and
+# resolver are spora-vpn's business.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
-    "Win32_NetworkManagement_IpHelper",
-    "Win32_NetworkManagement_Ndis",
-    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
 ] }

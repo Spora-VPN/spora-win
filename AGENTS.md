@@ -7,9 +7,13 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
 - **spora-wincore** — Windows service (`Spora`, auto-start, installed by the
   NSIS installer; `--service` runs the SCM entry point, without it wincore
   runs in console mode for dev). Owns the tunnel: drives
-  `spora_core::share()`/`connect()`, creates the TUN device via wintun
-  (client TUN address 10.0.85.1), manages routes through the Win32 IP Helper
-  API. Exposes a gRPC control API (`proto/spora.proto`, tonic) consumed by the
+  `spora_core::share()`/`connect()`; the client's host integration is the
+  shared `spora-vpn` crate from the sibling repo — the same code as
+  `spora use`: wintun adapter (10.0.85.1/24 + fd00:5350::2/64), half-default
+  routes, resolver = the sharer's DNS forwarder (100.64.0.53), MTU following
+  the path, every outer socket bound to the uplink (`IP_UNICAST_IF`) so the
+  punched peer never loops into the tunnel, DAD off on the adapter, all of
+  it undone when the session drops. Exposes a gRPC control API (`proto/spora.proto`, tonic) consumed by the
   UI — served on Windows over the named pipe `\\.\pipe\spora-wincore`
   (DACL: SYSTEM/Admins full, interactive users connect-only), on Linux dev
   builds over `[::1]:50051` TCP. Sessions are tied to their event stream:
@@ -39,7 +43,7 @@ cargo build        # dev build works on Linux (Windows-only deps are cfg(windows
 
 ## Relationship to the main repo
 
-`spora-wincore` depends on `spora-core` via a sibling path dependency
-(`../../spora/spora-core`), so a checkout of the main spora repo must sit next
-to this one. Protocol, transport, and connection-log documentation lives in
+`spora-wincore` depends on `spora-core` and `spora-vpn` via sibling path
+dependencies (`../../spora/spora-core`, `../../spora/spora-vpn`), so a checkout
+of the main spora repo must sit next to this one. Protocol, transport, and connection-log documentation lives in
 that repo's `CLAUDE.md` and `docs/`.

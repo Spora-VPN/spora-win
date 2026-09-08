@@ -1,7 +1,5 @@
 mod service;
 mod session;
-mod tun;
-mod route;
 #[cfg(windows)]
 mod pipe;
 #[cfg(windows)]

@@ -9,12 +9,31 @@ use url::Url;
 
 use crate::proto::*;
 use crate::proto::spora_server::Spora;
-use crate::route::RouteManager;
 use crate::session::{ConnectSession, SessionStore, ShareSession};
-use crate::tun::TunDevice;
 
 /// Hardcoded keepalive interval for Windows client tunnels.
 const KEEPALIVE_SECS: u64 = 20;
+
+/// The client's address inside the tunnel (wincore's traditional one; any
+/// private address does, the exit learns it from the packets).
+const TUN_ADDR: &str = "10.0.85.1/24";
+
+/// The host-side tunnel policy: full tunnel (v4 and v6), the sharer's DNS
+/// forwarder as the resolver, an MTU that follows the path — `spora use`'s
+/// defaults, except for the address.
+fn tunnel_options() -> Result<spora_vpn::Options, String> {
+    let dns: Vec<String> = spora_vpn::DEFAULT_DNS.iter().map(|s| s.to_string()).collect();
+    spora_vpn::Options::parse(
+        TUN_ADDR,
+        spora_vpn::DEFAULT_TUN_ADDR6,
+        false,
+        &[],
+        false,
+        &dns,
+        false,
+        None,
+    )
+}
 
 pub struct SporaService {
     sessions: Arc<SessionStore>,
@@ -188,34 +207,35 @@ impl Spora for SporaService {
         let sessions = self.sessions.clone();
 
         tokio::spawn(async move {
-            // MTU callback: on Windows, updates the TUN adapter MTU via Win32 API.
-            // Gated by `tun_ready` flag so early callbacks (before TUN creation) are deferred.
-            let tun_name = "Spora";
-            let tun_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let pending_mtu = Arc::new(std::sync::atomic::AtomicU16::new(0));
-            let tun_if_index = Arc::new(std::sync::atomic::AtomicU32::new(0));
-            let mtu_callback: spora_core::MtuCallback = {
-                let tun_ready = tun_ready.clone();
-                let pending_mtu = pending_mtu.clone();
-                let tun_if_index = tun_if_index.clone();
-                Some(Arc::new(move |mtu: u16| {
-                    if tun_ready.load(Ordering::Relaxed) {
-                        let if_index = tun_if_index.load(Ordering::Relaxed);
-                        info!("MTU callback: setting TUN MTU to {}", mtu);
-                        if let Err(e) = crate::tun::set_mtu(if_index, mtu as u32) {
-                            error!("Failed to set TUN MTU: {}", e);
-                        }
-                    } else {
-                        info!("MTU callback: TUN not ready yet, deferring MTU {}", mtu);
-                        pending_mtu.store(mtu, Ordering::Relaxed);
-                    }
-                }))
+            // Phase 1: the tunnel interface exists with its address and MTU
+            // but no routes, so the relay dial and the STUN queries use the
+            // normal network — spora-vpn's two-phase bring-up, the same as
+            // `spora use` and the Android client. A Linux dev build has no
+            // TUN; the session then runs without a tunnel so the control API
+            // can still be exercised.
+            let vpn = match tunnel_options().and_then(spora_vpn::Session::setup) {
+                Ok(s) => Some(Arc::new(s)),
+                Err(e) => {
+                    info!("TUN setup skipped/failed: {}", e);
+                    None
+                }
             };
-
-            let config = spora_core::Config {
-                mtu_callback,
-                ..spora_core::Config::default()
-            };
+            let mut config = spora_core::Config::default();
+            if let Some(s) = &vpn {
+                // Every outer socket (relay, STUN, punched peer) is bound to
+                // the uplink, so nothing loops into the tunnel whatever the
+                // routes say.
+                config.protector = s.protector();
+            }
+            config.mtu_callback = spora_vpn::mtu_callback(vpn.as_ref(), |event| match event {
+                spora_vpn::MtuEvent::Reported(mtu) => info!("path MTU budget reported: {}", mtu),
+                spora_vpn::MtuEvent::Applied(mtu) => info!("TUN MTU set to {}", mtu),
+                spora_vpn::MtuEvent::Failed { reported, error } => {
+                    error!("could not apply MTU {}: {}", reported, error)
+                }
+            });
+            config.event_hook =
+                spora_vpn::event_hook(vpn.as_ref(), |event| info!("tunnel event: {:?}", event));
 
             let result = match spora_core::connect(url, &config).await {
                 Ok(r) => r,
@@ -240,75 +260,101 @@ impl Spora for SporaService {
                 w.wake();
             }
 
-            // Create TUN device (Windows-only; returns Err on Linux)
-            let default_mtu = 1400u32;
-            let tun = match TunDevice::create(tun_name, default_mtu) {
-                Ok(t) => t,
-                Err(e) => {
-                    info!("TUN creation skipped/failed: {}", e);
-                    // On non-Windows, register session without tunnel so Share-side testing works.
-                    let routes = RouteManager::new();
-                    let task = tokio::spawn(async {});
-                    let session_cancel = cancel.clone();
-                    let handle = match sessions.insert_connect(ConnectSession {
-                        cancel,
-                        task,
-                        routes,
-                    }) {
-                        Some(h) => h,
-                        None => {
-                            info!("gRPC Connect: service shutting down, aborting new session");
-                            session_cancel.cancel();
-                            return;
+            let Some(vpn) = vpn else {
+                // No tunnel on this platform: register the session so the
+                // control API round-trips, and hold the transport until the
+                // client goes away.
+                let task = tokio::spawn(async move {
+                    let _transport = transport;
+                    std::future::pending::<()>().await;
+                });
+                let session_cancel = cancel.clone();
+                let handle = match sessions.insert_connect(ConnectSession {
+                    cancel,
+                    task,
+                    vpn: None,
+                }) {
+                    Some(h) => h,
+                    None => {
+                        info!("gRPC Connect: service shutting down, aborting new session");
+                        session_cancel.cancel();
+                        return;
+                    }
+                };
+                let _ = tx
+                    .send(Ok(ConnectEvent {
+                        event: Some(connect_event::Event::Connected(ConnectConnected {
+                            handle,
+                        })),
+                    }))
+                    .await;
+                tokio::select! {
+                    _ = tx.closed() => {
+                        if let Some(s) = sessions.remove_connect(handle) {
+                            info!("connect {} client disconnected — tearing down", handle);
+                            s.cancel.cancel();
+                            s.task.abort();
                         }
-                    };
+                    }
+                    _ = session_cancel.cancelled() => {}
+                }
+                return;
+            };
+
+            // Phase 2: the session is up and its sockets are protected — now
+            // point the host at the tunnel.
+            match vpn.activate() {
+                Ok(act) => info!(
+                    "tunnel up on {} ({}/{}{}), MTU {}: routes [{}], resolver [{}]{}",
+                    vpn.tun_name(),
+                    vpn.options().tun_addr,
+                    vpn.options().tun_prefix,
+                    vpn.options()
+                        .tun_addr6
+                        .map(|(a, p)| format!(", {a}/{p}"))
+                        .unwrap_or_default(),
+                    vpn.current_mtu(),
+                    act.routes
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    act.dns
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    act.dns_method
+                        .map(|m| format!(" via {m}"))
+                        .unwrap_or_default(),
+                ),
+                Err(e) => error!(
+                    "route/resolver setup failed (tunnel will run without routing): {}",
+                    e
+                ),
+            }
+            let pump_handle = match vpn.pump_handle() {
+                Ok(h) => h,
+                Err(e) => {
+                    error!("tunnel pump: {}", e);
                     let _ = tx
                         .send(Ok(ConnectEvent {
-                            event: Some(connect_event::Event::Connected(ConnectConnected {
-                                handle,
+                            event: Some(connect_event::Event::Error(ConnectError {
+                                message: e,
                             })),
                         }))
                         .await;
-                    tokio::select! {
-                        _ = tx.closed() => {
-                            if let Some(s) = sessions.remove_connect(handle) {
-                                info!("connect {} client disconnected — tearing down", handle);
-                                s.cancel.cancel();
-                                s.task.abort();
-                            }
-                        }
-                        _ = session_cancel.cancelled() => {}
-                    }
+                    cancel.cancel();
                     return;
                 }
             };
-
-            // TUN is ready — enable MTU callback and apply any deferred MTU
-            tun_if_index.store(tun.interface_index(), Ordering::Relaxed);
-            tun_ready.store(true, Ordering::Relaxed);
-            let deferred_mtu = pending_mtu.load(Ordering::Relaxed);
-            if deferred_mtu > 0 {
-                info!("Applying deferred MTU: {}", deferred_mtu);
-                if let Err(e) = crate::tun::set_mtu(tun.interface_index(), deferred_mtu as u32) {
-                    error!("Failed to set deferred TUN MTU: {}", e);
-                }
-            }
-
-            // Set up routes: exclude relay IP via original gateway, then default via TUN
-            let mut routes = RouteManager::new();
-            match setup_routes(&mut routes, &url_str, &tun) {
-                Ok(()) => {}
-                Err(e) => {
-                    error!("Route setup failed (tunnel will run without routing): {}", e);
-                }
-            }
 
             // Spawn tunnel bridge task
             let tunnel_cancel = cancel.clone();
             let task = tokio::spawn(async move {
                 info!("Tunnel task starting");
                 tokio::select! {
-                    result = crate::tun::run_tunnel(transport, &tun) => {
+                    result = spora_vpn::run_pump(transport, pump_handle) => {
                         match result {
                             Ok(()) => info!("Tunnel task exited normally"),
                             Err(e) => error!("Tunnel task error: {}", e),
@@ -324,13 +370,14 @@ impl Spora for SporaService {
             let handle = match sessions.insert_connect(ConnectSession {
                 cancel,
                 task,
-                routes,
+                vpn: Some(vpn),
             }) {
                 Some(h) => h,
                 None => {
                     // Service is shutting down. Dropping the session above
-                    // dropped its RouteManager, already removing the routes we
-                    // just installed; cancel the tunnel task and end.
+                    // dropped its spora-vpn session, already undoing the
+                    // routes and resolver we just installed; cancel the
+                    // tunnel task and end.
                     info!("gRPC Connect: service shutting down, tearing down new tunnel");
                     session_cancel.cancel();
                     return;
@@ -346,9 +393,9 @@ impl Spora for SporaService {
                 .await;
 
             // Tie the tunnel to the event stream (see share() above): a UI
-            // crash must tear down the default route, not leave the machine
+            // that crashed or was closed must not leave the host's traffic
             // routing into a dead tunnel. Dropping the session also drops its
-            // RouteManager, which removes the routes it added.
+            // spora-vpn session, which undoes the routes and resolver.
             tokio::select! {
                 _ = tx.closed() => {
                     if let Some(s) = sessions.remove_connect(handle) {
@@ -394,7 +441,7 @@ impl Spora for SporaService {
             .ok_or_else(|| Status::not_found("invalid connect handle"))?;
         session.cancel.cancel();
         session.task.abort();
-        // session.routes dropped here → routes cleaned up
+        // session.vpn dropped here → routes and resolver undone, adapter closed
 
         Ok(Response::new(DisconnectResponse {}))
     }
@@ -453,69 +500,3 @@ fn default_connlog_dir(identity: &spora_core::identity::Identity) -> std::path::
         .join(rk_hex)
 }
 
-/// Set up routing: exclude the relay host via the original gateway, then add a default
-/// route through the TUN adapter. This is the Windows equivalent of Android's
-/// VpnService.protect() + addRoute("0.0.0.0/0").
-fn setup_routes(
-    routes: &mut RouteManager,
-    url_str: &str,
-    tun: &TunDevice,
-) -> Result<(), String> {
-    use std::net::ToSocketAddrs;
-
-    // Parse every relay endpoint out of the URL (a share URL can carry
-    // several; a hostname may resolve to more than one IPv4). Each must be
-    // excluded from the tunnel so its traffic reaches the real NIC, or the
-    // relay path loops through the VPN it bootstraps.
-    let url = Url::parse(url_str).map_err(|e| format!("invalid URL: {}", e))?;
-    let token =
-        spora_core::identity::Token::from_url(&url).map_err(|e| format!("invalid share URL: {}", e))?;
-    let mut relay_ips: Vec<String> = Vec::new();
-    for relay in &token.relays {
-        if let Ok(ip) = relay.host.parse::<std::net::IpAddr>() {
-            // Windows split-tunnel routing here is IPv4-only; a v6 relay
-            // literal needs a v6 route exclusion this code doesn't do yet.
-            if ip.is_ipv4() {
-                relay_ips.push(ip.to_string());
-            } else {
-                info!("skipping IPv6 relay {} (v6 route exclusion unimplemented)", ip);
-            }
-        } else {
-            match format!("{}:0", relay.host).to_socket_addrs() {
-                Ok(addrs) => relay_ips.extend(addrs.filter(|a| a.is_ipv4()).map(|a| a.ip().to_string())),
-                Err(e) => info!("failed to resolve relay host '{}': {}", relay.host, e),
-            }
-        }
-    }
-    if relay_ips.is_empty() {
-        return Err("no IPv4 relay address resolved from the share URL".into());
-    }
-
-    let gw = crate::route::detect_default_gateway()?;
-    info!(
-        "Original default gateway: {} via IF {}",
-        gw.gateway, gw.interface_index
-    );
-
-    let tun_if = tun.interface_index();
-
-    // Exclude each relay IP so its traffic goes through the real NIC (prevents routing loop)
-    for relay_ip in &relay_ips {
-        routes.exclude_host(relay_ip, &gw.gateway, gw.interface_index)?;
-    }
-
-    // Exclude STUN server so direct upgrade probes don't loop through tunnel
-    if let Ok(addrs) = ("stun.l.google.com", 19302u16).to_socket_addrs() {
-        for addr in addrs.filter(|a| a.is_ipv4()) {
-            let ip = addr.ip().to_string();
-            if let Err(e) = routes.exclude_host(&ip, &gw.gateway, gw.interface_index) {
-                info!("Failed to exclude STUN IP {}: {}", ip, e);
-            }
-        }
-    }
-
-    // Route all traffic through TUN
-    routes.add_default_route(tun_if)?;
-
-    Ok(())
-}
