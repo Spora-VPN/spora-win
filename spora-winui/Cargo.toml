@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-slint = { version = "1.15", default-features = false, features = ["backend-winit", "renderer-software", "compat-1-2"] }
+slint = { version = "1.15", default-features = false, features = ["backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
 tonic = "0.13"
 prost = "0.13"
 tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# wt — build, deploy and drive the Spora Windows client on the test box, and
+# run a sharer peer for it on a Linux host. See tools/wintest/README.md.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$HERE/../.." && pwd)
+HOST=${WT_HOST:-user@windows-box}          # Windows test box (ssh, PowerShell shell)
+PEER=${WT_PEER:-root@sharer-peer}           # sharer peer
+TARGET=x86_64-pc-windows-gnu
+WROOT='C:\SporaTest'                          # PowerShell spelling
+WROOT_SCP='C:/SporaTest'                      # scp spelling
+SHOTS=${WT_SHOTS:-$REPO/target/wintest/shots} # where `wt shot` lands PNGs (under target/, ignored by git)
+CM_DIR=${XDG_RUNTIME_DIR:-/tmp}
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ControlMaster=auto -o ControlPath="$CM_DIR/wt-ssh-%C" -o ControlPersist=10m -o LogLevel=ERROR)
+
+die()  { echo "wt: $*" >&2; exit 1; }
+wssh() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
+wscp() { scp "${SSH_OPTS[@]}" "$@"; }
+pssh() { ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR "$PEER" "$@"; }
+# Run one of the win/ scripts (already copied to C:\SporaTest) in the SSH
+# session. That session is elevated (Administrators get a full token over
+# Windows OpenSSH) but lives in session 0: fine for services and files, blind
+# to the desktop.
+wps1() { local s=$1; shift; wssh "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $WROOT\\$s $*"; }
+# Run a PowerShell snippet INSIDE THE DESKTOP SESSION through the agent, with
+# the lib.ps1 helpers in scope. Snippet from $1, or stdin when no argument.
+desk() {
+  local script b64 t=${WT_TIMEOUT:-120}
+  if [ $# -gt 0 ]; then script=$1; else script=$(cat); fi
+  b64=$(printf '%s' "$script" | base64 -w0)
+  if [ ${#b64} -lt 16000 ]; then
+    wssh "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $WROOT\\submit.ps1 -Timeout $t -Script $b64"
+  else
+    printf '%s' "$b64" | wssh "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $WROOT\\submit.ps1 -Timeout $t"
+  fi
+}
+# Single-quoted PowerShell string literal.
+psq() { printf "'%s'" "${1//\'/\'\'}"; }
+
+usage() {
+  cat <<'USAGE'
+usage: wt <command> [args]
+
+Windows box (WT_HOST, default user@windows-box):
+  setup                    copy win/*.ps1 over, register+start the desktop agent task, disable display/standby timeouts
+  push                     copy win/*.ps1 over only (lib/submit/deploy changes take effect at once)
+  status                   service, processes, installed exe timestamps, agent heartbeat
+  build [--ui|--core]      cargo build --release --target x86_64-pc-windows-gnu
+  install                  ./build-winui.sh + silent NSIS install (first install / installer & upgrade tests)
+  deploy [--ui|--core] [--no-build]
+                           build, copy exes over, cycle the service / restart-free UI swap
+  run [URL] [--log LEVEL] [--keep-windows]
+                           launch the installed UI in the desktop session (RUST_LOG=LEVEL), minimise other windows, park it top-left
+  kill                     stop the UI
+  shot [NAME] [--screen]   PNG of the Spora window (or whole screen) -> target/wintest/shots/NAME.png
+  tree [DEPTH]             UI Automation tree (AccessKit) with window-relative bounds
+  find NAME                UIA elements whose name equals/contains NAME
+  click X Y | click NAME [--right] [--double] [--screen] [--type Button]
+                           click window-relative coords, or the centre of the UIA element NAME; refuses if
+                           another window is under the point (--screen = absolute coords, no such check)
+  type TEXT | keys KEYS | paste TEXT
+                           type literally / raw SendKeys syntax ({ENTER}, ^a ...) / clipboard + Ctrl+V
+  ps [SCRIPT]              run arbitrary PowerShell in the desktop session (lib.ps1 loaded); stdin if no arg
+  log [-n N] [--ui|--core] tail the service log and/or the UI log
+  reset                    kill UI, delete saved connections + UI log
+  agent-log [N]            tail the desktop agent's own log
+  ssh [CMD] / scp ARGS     raw access with the shared connection
+
+Sharer peer (WT_PEER, default root@sharer-peer):
+  peer-push [--build]      copy the musl spora-cli (optionally rebuilt) to /root/wintest/ on the peer
+  peer-share [ARGS]        (re)start `spora-cli share --json ARGS` as a transient systemd unit, print the share URL
+  peer-url | peer-log [N] | peer-stop
+USAGE
+}
+
+cmd=${1:-help}; [ $# -gt 0 ] && shift
+case $cmd in
+  help|-h|--help) usage ;;
+
+  setup)
+    wssh "New-Item -ItemType Directory -Force -Path $WROOT | Out-Null"
+    wscp "$HERE"/win/*.ps1 "$HOST:$WROOT_SCP/"
+    wps1 setup.ps1 "$@"
+    ;;
+
+  push)
+    wscp "$HERE"/win/*.ps1 "$HOST:$WROOT_SCP/"
+    echo "scripts pushed (agent.ps1 changes need 'wt setup' to restart the agent)"
+    ;;
+
+  status)
+    wssh "'service: ' + [string](Get-Service Spora -ErrorAction SilentlyContinue).Status;
+      Get-Process spora-winui,spora-wincore -ErrorAction SilentlyContinue | Format-Table -AutoSize Name,Id,SessionId,StartTime;
+      \$inst = Split-Path -Parent (((Get-CimInstance Win32_Service -Filter \"Name='Spora'\" -ErrorAction SilentlyContinue).PathName) -replace '^\"([^\"]+)\".*$','\$1'); 'install dir: ' + \$inst;
+      Get-Item \"\$inst\\*.exe\" -ErrorAction SilentlyContinue | Format-Table -AutoSize Name,Length,LastWriteTime;
+      'desktop user: ' + (Get-CimInstance Win32_ComputerSystem).UserName;
+      'agent task: ' + [string](Get-ScheduledTask SporaTestAgent -ErrorAction SilentlyContinue).State + '  heartbeat: ' + [string](Get-Content '$WROOT\\agent.alive' -ErrorAction SilentlyContinue) + '  now: ' + (Get-Date -Format s)"
+    ;;
+
+  build)
+    pkgs=(-p spora-wincore -p spora-winui)
+    case ${1:-} in --ui) pkgs=(-p spora-winui) ;; --core) pkgs=(-p spora-wincore) ;; esac
+    (cd "$REPO" && cargo build --release --target $TARGET "${pkgs[@]}")
+    ;;
+
+  install)
+    (cd "$REPO" && ./build-winui.sh)
+    wscp "$HOME/winshare/spora-installer.exe" "$HOST:$WROOT_SCP/bin/"
+    wssh "Start-Process -FilePath '$WROOT\\bin\\spora-installer.exe' -ArgumentList '/S' -Wait; Start-Sleep 2;
+      'service: ' + [string](Get-Service Spora -ErrorAction SilentlyContinue).Status;
+      \$inst = Split-Path -Parent (((Get-CimInstance Win32_Service -Filter \"Name='Spora'\" -ErrorAction SilentlyContinue).PathName) -replace '^\"([^\"]+)\".*$','\$1'); 'install dir: ' + \$inst;
+      Get-Item \"\$inst\\*\" | Format-Table -AutoSize Name,Length,LastWriteTime"
+    ;;
+
+  deploy)
+    build=1; ui=0; core=0
+    for a in "$@"; do case $a in --ui) ui=1 ;; --core) core=1 ;; --no-build) build=0 ;; *) die "deploy: unknown arg $a" ;; esac; done
+    [ $ui = 0 ] && [ $core = 0 ] && { ui=1; core=1; }
+    flags=(); files=(); bflag=()
+    [ $ui = 1 ]   && { flags+=(-Ui);   files+=("$REPO/target/$TARGET/release/spora-winui.exe"); }
+    [ $core = 1 ] && { flags+=(-Core); files+=("$REPO/target/$TARGET/release/spora-wincore.exe"); }
+    [ $ui = 1 ] && [ $core = 0 ] && bflag=(--ui)
+    [ $core = 1 ] && [ $ui = 0 ] && bflag=(--core)
+    [ $build = 1 ] && "$0" build "${bflag[@]}"
+    wscp "${files[@]}" "$HOST:$WROOT_SCP/bin/"
+    wps1 deploy.ps1 "${flags[@]}"
+    ;;
+
+  run)
+    args=(); lvl=""
+    keep=""
+    while [ $# -gt 0 ]; do case $1 in --log) lvl=$2; shift 2 ;; --keep-windows) keep=" -KeepWindows"; shift ;; *) args+=("$1"); shift ;; esac; done
+    psargs=""; for a in "${args[@]}"; do psargs+="$(psq "$a"),"; done; psargs=${psargs%,}
+    pre=""; [ -n "$lvl" ] && pre="\$env:WT_RUST_LOG = $(psq "$lvl"); "
+    desk "${pre}Start-Ui -Arguments @($psargs)$keep"
+    ;;
+
+  kill) desk 'Stop-Ui' ;;
+
+  shot)
+    name=""; extra=""
+    for a in "$@"; do case $a in --screen) extra+=" -Screen" ;; --noraise) extra+=" -NoRaise" ;; *) name=$a ;; esac; done
+    nm=""; [ -n "$name" ] && nm=" -Name $(psq "$name")"
+    out=$(desk "Save-Screenshot$nm$extra")
+    printf '%s\n' "$out"
+    remote=$(printf '%s\n' "$out" | sed -n 's/^SHOT \(.*\.png\) .*/\1/p' | head -1)
+    [ -n "$remote" ] || die "no screenshot produced"
+    mkdir -p "$SHOTS"
+    dst=$SHOTS/$(basename "${remote//\\//}")
+    wscp "$HOST:${remote//\\//}" "$dst"
+    echo "$dst"
+    ;;
+
+  tree) desk "Format-UiaTree (Get-UiaTree -MaxDepth ${1:-16})" ;;
+  find) [ $# -ge 1 ] || die "usage: wt find NAME"; desk "Find-UiaElement -Name $(psq "$*") -All | Format-Table -AutoSize Type,Name,X,Y,W,H" ;;
+
+  click)
+    flags=""; pos=(); type=""
+    while [ $# -gt 0 ]; do
+      case $1 in --right) flags+=" -Right" ;; --double) flags+=" -Double" ;; --screen) flags+=" -Screen -Force" ;; --type) type=$2; shift ;; *) pos+=("$1") ;; esac; shift
+    done
+    if [ ${#pos[@]} -eq 2 ] && [[ ${pos[0]} =~ ^-?[0-9]+$ && ${pos[1]} =~ ^-?[0-9]+$ ]]; then
+      desk "Invoke-Click -X ${pos[0]} -Y ${pos[1]}$flags"
+    elif [ ${#pos[@]} -ge 1 ]; then
+      t=""; [ -n "$type" ] && t=" -Type $type"
+      desk "Invoke-ClickElement -Name $(psq "${pos[*]}")$t$flags"
+    else die "usage: wt click X Y | wt click NAME"; fi
+    ;;
+
+  type)  desk "Send-Text $(psq "$*")" ;;
+  keys)  desk "Send-Keys $(psq "$*")" ;;
+  paste) desk "Send-Paste $(psq "$*")" ;;
+  ps)    if [ $# -gt 0 ]; then desk "$*"; else desk; fi ;;
+
+  log)
+    n=60; which=both
+    while [ $# -gt 0 ]; do case $1 in -n) n=$2; shift ;; --ui) which=ui ;; --core) which=core ;; esac; shift; done
+    [ $which != ui ]   && { echo "== C:\\ProgramData\\Spora\\spora-wincore.log (service) =="; wssh "Get-Content -Tail $n 'C:\\ProgramData\\Spora\\spora-wincore.log' -ErrorAction SilentlyContinue"; }
+    [ $which != core ] && { echo "== %LOCALAPPDATA%\\Spora\\spora-winui.log (UI) =="; wssh "Get-Content -Tail $n \"\$env:LOCALAPPDATA\\Spora\\spora-winui.log\" -ErrorAction SilentlyContinue"; }
+    ;;
+
+  reset)
+    desk 'Stop-Ui'
+    wssh "Remove-Item -Recurse -Force \"\$env:APPDATA\\spora\" -ErrorAction SilentlyContinue; Remove-Item \"\$env:LOCALAPPDATA\\Spora\\spora-winui.log\" -ErrorAction SilentlyContinue; 'reset: saved connections and UI log removed'"
+    ;;
+
+  agent-log) wssh "Get-Content -Tail ${1:-30} '$WROOT\\agent.log'" ;;
+  ssh) wssh "$@" ;;
+  scp) wscp "$@" ;;
+
+  peer-push)
+    bin=$REPO/../spora/target/x86_64-unknown-linux-musl/release/spora-cli
+    if [ "${1:-}" = --build ]; then (cd "$REPO/../spora" && cargo build --release --target x86_64-unknown-linux-musl -p spora-cli); fi
+    [ -x "$bin" ] || die "no musl spora-cli at $bin (wt peer-push --build)"
+    pssh 'mkdir -p /root/wintest'
+    scp -o BatchMode=yes -o LogLevel=ERROR "$bin" "$PEER:/root/wintest/spora-cli"
+    pssh '/root/wintest/spora-cli --version'
+    ;;
+  peer-share) pssh "sh -s -- $*" < "$HERE/peer/share.sh" ;;
+  peer-url)   pssh "grep -o '\"url\":\"[^\"]*\"' /root/wintest/share.jsonl | head -1 | cut -d'\"' -f4" ;;
+  peer-log)   pssh "systemctl status spora-wintest-share --no-pager -n0 2>&1 | head -3; echo '== stderr =='; tail -n ${1:-40} /root/wintest/share.err; echo '== events =='; tail -n 20 /root/wintest/share.jsonl" ;;
+  peer-stop)  pssh 'systemctl stop spora-wintest-share; systemctl reset-failed spora-wintest-share 2>/dev/null; echo stopped' ;;
+
+  *) usage; die "unknown command: $cmd" ;;
+esac

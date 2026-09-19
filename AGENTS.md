@@ -41,6 +41,14 @@ cargo build        # dev build works on Linux (Windows-only deps are cfg(windows
 `wintun.dll` verified against a pinned SHA-256 and writes the installer to
 `~/winshare/spora-installer.exe`.
 
+## Testing on the Windows box
+
+`tools/wintest/wt` builds the client here, pushes it to the dedicated Windows
+test laptop over SSH, launches it on that machine's desktop and brings back
+screenshots, the UI Automation tree and logs (`wt deploy`, `wt run`,
+`wt shot`, `wt tree`, `wt click`, ...); `wt peer-share` runs a sharer on a
+Linux host for real connect flows. See `tools/wintest/README.md`.
+
 ## Relationship to the main repo
 
 `spora-wincore` depends on `spora-core` and `spora-vpn` via sibling path
