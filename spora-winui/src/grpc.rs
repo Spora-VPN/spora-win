@@ -133,24 +133,6 @@ impl GrpcClient {
         Ok(resp.into_inner())
     }
 
-    pub async fn stop_share(&self, handle: i32) -> Result<(), String> {
-        self.inner
-            .clone()
-            .stop_share(StopShareRequest { handle })
-            .await
-            .map_err(|e| format!("StopShare RPC failed: {e}"))?;
-        Ok(())
-    }
-
-    pub async fn disconnect(&self, handle: i32) -> Result<(), String> {
-        self.inner
-            .clone()
-            .disconnect(DisconnectRequest { handle })
-            .await
-            .map_err(|e| format!("Disconnect RPC failed: {e}"))?;
-        Ok(())
-    }
-
     /// Stops the wincore process. Only used on Linux dev builds, where the
     /// UI spawned wincore itself; on Windows the service outlives the UI.
     #[cfg(not(windows))]

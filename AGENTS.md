@@ -26,7 +26,24 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   dependency on spora-core; its `build.rs` compiles
   `../spora-wincore/proto/spora.proto`. Runs unelevated; connects to the
   service's named pipe (on Linux dev it spawns wincore itself and uses TCP).
-  Registers/handles the `spora:` URI scheme; single-instance.
+  Registers/handles the `spora:` URI scheme; single-instance. The UI is the
+  "master-detail instrument" from the Windows design canvas (claude.ai design
+  project `Spora Windows.dc.html`, built on the Spora design system): the
+  sidebar is the connection list (shape-coded status: ● active, ○ pending,
+  ◆ error), the detail pane is the status surface, creating a share is an
+  in-place handoff (busy pane → link ready + copy + naming), connecting goes
+  through a centered dialog. Design tokens live in `ui/theme.slint`; IBM Plex
+  Sans/Mono are bundled from `ui/fonts/` (nothing may be fetched at runtime).
+  The client keeps running in the notification area when its window is
+  closed: `src/tray.rs` renders the tray icon (mono mark + state shape,
+  theme-aware) and its native menu, `ui/flyout.slint` is the left-click
+  flyout, `src/toast.rs` posts Windows toasts (AUMID `Spora.Client`). All
+  UI state is pushed from Rust in one `render()` (main.rs); sessions are
+  tokio tasks that own their gRPC stream, and stopping one aborts the task
+  (dropping the stream is what tears the service session down).
+  `SPORA_UI_DEMO=states|share|empty|new|creating|banner` seeds every UI
+  state without touching the service or the saved connections, and
+  `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout, for screenshot matrices.
 
 ## Build
 
@@ -46,8 +63,12 @@ cargo build        # dev build works on Linux (Windows-only deps are cfg(windows
 `tools/wintest/wt` builds the client here, pushes it to the dedicated Windows
 test laptop over SSH, launches it on that machine's desktop and brings back
 screenshots, the UI Automation tree and logs (`wt deploy`, `wt run`,
-`wt shot`, `wt tree`, `wt click`, ...); `wt peer-share` runs a sharer on a
-Linux host for real connect flows. See `tools/wintest/README.md`.
+`wt shot`, `wt tree`, `wt click`, `wt tray`, `wt shot --flyout`, ...);
+`wt peer-share` runs a sharer on a Linux host for real connect flows.
+`wt vnc` mirrors the box's console desktop over an SSH-tunnelled, loopback-only
+TightVNC for hands-on testing -- VNC rather than RDP because RDP would detach
+the console session the whole agent depends on (and the box is Windows Home).
+See `tools/wintest/README.md`.
 
 ## Relationship to the main repo
 

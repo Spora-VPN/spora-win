@@ -13,6 +13,11 @@ WROOT_SCP='C:/SporaTest'                      # scp spelling
 SHOTS=${WT_SHOTS:-$REPO/target/wintest/shots} # where `wt shot` lands PNGs (under target/, ignored by git)
 CM_DIR=${XDG_RUNTIME_DIR:-/tmp}
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ControlMaster=auto -o ControlPath="$CM_DIR/wt-ssh-%C" -o ControlPersist=10m -o LogLevel=ERROR)
+VNC_MSI_URL=${WT_VNC_MSI_URL:-https://www.tightvnc.com/download/2.8.88/tightvnc-2.8.88-gpl-setup-64bit.msi}
+VNC_MSI_SHA=${WT_VNC_MSI_SHA:-fa86d817ac29c5ffe1e8e7095e738d9ba5ca28aa62304ac234580916622a8ca2}
+VNC_PORT=${WT_VNC_PORT:-5901}                 # LOCAL port for the tunnel; 5900 is often the local x11vnc
+VNC_PWFILE=${WT_VNC_PWFILE:-$HOME/.config/spora-wintest/vnc-password}
+VNC_PIDFILE=$CM_DIR/wt-vnc-tunnel.pid
 
 die()  { echo "wt: $*" >&2; exit 1; }
 wssh() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
@@ -38,6 +43,36 @@ desk() {
 # Single-quoted PowerShell string literal.
 psq() { printf "'%s'" "${1//\'/\'\'}"; }
 
+
+# --- VNC ------------------------------------------------------------------
+# TightVNC on the box listens on 127.0.0.1 only, so the tunnel below is the
+# only way in and the 8-character VNC password never faces the LAN. Mirroring
+# the console session (rather than RDP, which detaches it) is what keeps the
+# SporaTestAgent desktop -- and every wt shot/click -- working while you watch.
+vnc_pw() {
+  [ -r "$VNC_PWFILE" ] || die "no VNC password at $VNC_PWFILE (set WT_VNC_PWFILE, or run 'wt vnc install')"
+  tr -d '\r\n' < "$VNC_PWFILE"
+}
+vnc_tunnel_live() {
+  [ -f "$VNC_PIDFILE" ] || return 1
+  local pid; pid=$(cat "$VNC_PIDFILE" 2>/dev/null) || return 1
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+vnc_tunnel_up() {
+  vnc_tunnel_live && { echo "tunnel already up (pid $(cat "$VNC_PIDFILE")): localhost:$VNC_PORT"; return 0; }
+  # ExitOnForwardFailure: never leave a half-open tunnel that silently points
+  # at whatever else owns the local port (a local x11vnc on 5900, say).
+  ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ExitOnForwardFailure=yes \
+      -o ServerAliveInterval=30 -f -N -L "$VNC_PORT:127.0.0.1:5900" "$HOST" \
+    || die "could not forward localhost:$VNC_PORT -> box:5900 (port busy? try WT_VNC_PORT=5902)"
+  pgrep -f "ssh.*-L $VNC_PORT:127.0.0.1:5900.*$HOST" | tail -1 > "$VNC_PIDFILE"
+  echo "tunnel up: localhost:$VNC_PORT -> $HOST:5900"
+}
+vnc_tunnel_down() {
+  if vnc_tunnel_live; then kill "$(cat "$VNC_PIDFILE")" 2>/dev/null; rm -f "$VNC_PIDFILE"; echo "tunnel closed"
+  else rm -f "$VNC_PIDFILE"; echo "no tunnel running"; fi
+}
+
 usage() {
   cat <<'USAGE'
 usage: wt <command> [args]
@@ -53,7 +88,10 @@ Windows box (WT_HOST, default user@windows-box):
   run [URL] [--log LEVEL] [--keep-windows]
                            launch the installed UI in the desktop session (RUST_LOG=LEVEL), minimise other windows, park it top-left
   kill                     stop the UI
-  shot [NAME] [--screen]   PNG of the Spora window (or whole screen) -> target/wintest/shots/NAME.png
+  shot [NAME] [--screen|--flyout]
+                           PNG of the Spora window (or the whole screen, or the tray flyout) -> target/wintest/shots/NAME.png
+  tray                     click the tray icon through UI Automation (opens/closes the flyout); prints its tooltip
+  toasts                   toasts the client delivered (notification-platform history for its AppUserModelId)
   tree [DEPTH]             UI Automation tree (AccessKit) with window-relative bounds
   find NAME                UIA elements whose name equals/contains NAME
   click X Y | click NAME [--right] [--double] [--screen] [--type Button]
@@ -66,6 +104,9 @@ Windows box (WT_HOST, default user@windows-box):
   reset                    kill UI, delete saved connections + UI log
   agent-log [N]            tail the desktop agent's own log
   ssh [CMD] / scp ARGS     raw access with the shared connection
+  vnc [view|tunnel|down|status|install|uninstall]
+                           mirror the box's console desktop over VNC through an SSH tunnel
+                           (no args = tunnel + viewer); see README "Watching the desktop"
 
 Sharer peer (WT_PEER, default root@sharer-peer):
   peer-push [--build]      copy the musl spora-cli (optionally rebuilt) to /root/wintest/ on the peer
@@ -140,7 +181,7 @@ case $cmd in
 
   shot)
     name=""; extra=""
-    for a in "$@"; do case $a in --screen) extra+=" -Screen" ;; --noraise) extra+=" -NoRaise" ;; *) name=$a ;; esac; done
+    for a in "$@"; do case $a in --screen) extra+=" -Screen" ;; --flyout) extra+=" -Flyout" ;; --noraise) extra+=" -NoRaise" ;; *) name=$a ;; esac; done
     nm=""; [ -n "$name" ] && nm=" -Name $(psq "$name")"
     out=$(desk "Save-Screenshot$nm$extra")
     printf '%s\n' "$out"
@@ -152,6 +193,8 @@ case $cmd in
     echo "$dst"
     ;;
 
+  tray) desk 'Invoke-TrayIcon' ;;
+  toasts) desk 'Get-SporaToasts' ;;
   tree) desk "Format-UiaTree (Get-UiaTree -MaxDepth ${1:-16})" ;;
   find) [ $# -ge 1 ] || die "usage: wt find NAME"; desk "Find-UiaElement -Name $(psq "$*") -All | Format-Table -AutoSize Type,Name,X,Y,W,H" ;;
 
@@ -183,6 +226,46 @@ case $cmd in
   reset)
     desk 'Stop-Ui'
     wssh "Remove-Item -Recurse -Force \"\$env:APPDATA\\spora\" -ErrorAction SilentlyContinue; Remove-Item \"\$env:LOCALAPPDATA\\Spora\\spora-winui.log\" -ErrorAction SilentlyContinue; 'reset: saved connections and UI log removed'"
+    ;;
+
+  vnc)
+    sub=${1:-view}; [ $# -gt 0 ] && shift
+    case $sub in
+      install)
+        msi=$REPO/target/wintest/tightvnc.msi
+        mkdir -p "$(dirname "$msi")"
+        if [ ! -f "$msi" ] || [ "$(sha256sum "$msi" | cut -d' ' -f1)" != "$VNC_MSI_SHA" ]; then
+          echo "downloading $VNC_MSI_URL"
+          curl -sSL --max-time 300 -o "$msi" "$VNC_MSI_URL" || die "download failed"
+        fi
+        got=$(sha256sum "$msi" | cut -d' ' -f1)
+        [ "$got" = "$VNC_MSI_SHA" ] || die "MSI sha256 mismatch: got $got, want $VNC_MSI_SHA"
+        if [ ! -r "$VNC_PWFILE" ]; then
+          mkdir -p "$(dirname "$VNC_PWFILE")"; chmod 700 "$(dirname "$VNC_PWFILE")"
+          tr -dc 'A-Za-z2-9' < /dev/urandom | head -c 8 > "$VNC_PWFILE"; chmod 600 "$VNC_PWFILE"
+          echo "generated a VNC password in $VNC_PWFILE"
+        fi
+        wssh "New-Item -ItemType Directory -Force -Path $WROOT\\bin | Out-Null" >/dev/null
+        wscp "$msi" "$HOST:$WROOT_SCP/bin/tightvnc.msi"
+        wps1 vnc.ps1 "-Password '$(vnc_pw)'"
+        ;;
+      uninstall) vnc_tunnel_down >/dev/null; wps1 vnc.ps1 "-Uninstall" ;;
+      tunnel)    vnc_tunnel_up ;;
+      down)      vnc_tunnel_down ;;
+      status)
+        wssh "'service: ' + [string](Get-Service tvnserver -ErrorAction SilentlyContinue).Status;
+          'listening: ' + (((Get-NetTCPConnection -State Listen -LocalPort 5900 -ErrorAction SilentlyContinue).LocalAddress) -join ',');
+          'desktop user: ' + (Get-CimInstance Win32_ComputerSystem).UserName"
+        vnc_tunnel_live && echo "tunnel: up on localhost:$VNC_PORT (pid $(cat "$VNC_PIDFILE"))" || echo "tunnel: down"
+        ;;
+      view)
+        command -v vncviewer >/dev/null || die "no vncviewer on PATH (apt install xtightvncviewer)"
+        vnc_tunnel_up
+        echo "connecting viewer to localhost:$VNC_PORT (close the window to disconnect; tunnel stays up)"
+        printf '%s\n' "$(vnc_pw)" | vncviewer -autopass -encodings 'tight copyrect' -compresslevel 6 "$@" "localhost::$VNC_PORT"
+        ;;
+      *) die "unknown vnc subcommand: $sub (view|tunnel|down|status|install|uninstall)" ;;
+    esac
     ;;
 
   agent-log) wssh "Get-Content -Tail ${1:-30} '$WROOT\\agent.log'" ;;

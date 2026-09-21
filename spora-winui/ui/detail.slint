@@ -1,0 +1,509 @@
+// The detail pane is the status surface (design canvas 1b/2a/2c/2d/3a):
+// breadcrumb, shape-coded status line with elapsed time, the name, the
+// barcode while live, the info card, the toggle card, and the footer actions.
+
+import { Theme, ConnectionItem } from "theme.slint";
+import { MicroLabel, StatusText, DataText, BodyText, BodySmText, StatusShape, Tone,
+         SporaToggle, ActionButton, MicroButton, InputField, Barcode, ActionCard, Card, InfoRow,
+         CopyIcon, ShareAgainIcon } from "components.slint";
+
+/// Shape + status text (+ elapsed time) row.
+component StatusRow inherits HorizontalLayout {
+    in property <string> shape;
+    in property <string> text;
+    in property <string> tone;
+    in property <string> elapsed;
+    in property <bool> sentence: false;   // error sentences are sans, not mono
+    spacing: 8px;
+    alignment: start;
+    height: 12px;
+    if shape != "" : Rectangle {
+        width: 8px;
+        StatusShape { state: shape; y: (parent.height - self.height) / 2; }
+    }
+    if !sentence : StatusText { text: root.text; color: Tone.color(root.tone); }
+    if sentence : Text {
+        text: root.text;
+        font-size: 11.5px;
+        color: Theme.error;
+        vertical-alignment: center;
+    }
+    if elapsed != "" : HorizontalLayout {
+        padding-left: 6px;
+        DataText { text: root.elapsed; color: Theme.text-muted; }
+    }
+}
+
+export component ErrorBanner inherits Rectangle {
+    in property <string> text;
+    callback dismiss();
+    background: Theme.surface-error-tint;
+    border-width: 1px;
+    border-color: Theme.border-error;
+    border-radius: Theme.radius-card;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 8px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 12px;
+        alignment: space-between;
+        HorizontalLayout {
+            spacing: 8px;
+            horizontal-stretch: 1;
+            Rectangle { width: 8px; StatusShape { state: "error"; y: (parent.height - self.height) / 2; } }
+            Text {
+                text: root.text;
+                font-size: 12.5px;
+                color: Theme.error-strong;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                min-height: 32px;
+            }
+        }
+        Rectangle {
+            width: 70px;
+            MicroButton { text: "DISMISS"; text-color: Theme.text-muted; y: (parent.height - self.height) / 2; clicked => { root.dismiss(); } }
+        }
+    }
+}
+
+// ── Detail (1b/2a/2d) ────────────────────────────────────────────────
+
+export component DetailPane inherits VerticalLayout {
+    in property <ConnectionItem> item;
+    in property <[float]> bars;
+    in property <string> elapsed;
+    in-out property <bool> renaming;
+    in-out property <string> rename-text;
+    callback toggle(id: string, role: string, on: bool);
+    callback copy(text: string);
+    callback retry(role: string, id: string);
+    callback delete(role: string, id: string);
+    callback rename(role: string, id: string, label: string);
+
+    property <bool> is-share: item.role == "share";
+    property <bool> active: item.status == "sharing" || item.status == "connected";
+    property <bool> pending: item.status == "starting" || item.status == "connecting";
+    property <bool> on: active || pending;
+    property <bool> error: item.status == "error";
+    property <string> shape: active ? "active" : pending ? "pending" : error ? "error" : "";
+    property <string> status-text: is-share
+        ? (active ? "↑ SHARING" : pending ? "↑ STARTING…" : "INACTIVE")
+        : (active ? "↓ CONNECTED" : pending ? "↓ CONNECTING VIA «" + item.label.to-uppercase() + "»…" : "INACTIVE");
+    property <string> tone: active ? "success" : pending ? "pending" : "muted";
+    property <string> toggle-title: is-share
+        ? (active ? "Sharing" : pending ? "Starting…" : "Not sharing")
+        : (active ? "Connected" : pending ? "Connecting…" : "Disconnected");
+    property <string> toggle-hint: is-share
+        ? (active ? "Your internet is available at this link."
+           : pending ? "Setting up the link. Turn off to cancel."
+           : error ? "Turn on to try again."
+           : "Turn on to make your internet available at this link.")
+        : (active ? "All this PC's traffic goes through «" + item.label + "»."
+           : pending ? "Reaching «" + item.label + "». Turn off to cancel."
+           : error ? "Turn on to try again."
+           : "Turn on to route this PC's traffic through «" + item.label + "».");
+
+    padding-left: 30px;
+    padding-right: 30px;
+    padding-top: 20px;
+    padding-bottom: 26px;
+    spacing: 0;
+
+    // Content packs to the top; the footer row sits at the bottom.
+    VerticalLayout {
+    alignment: start;
+    vertical-stretch: 1;
+    spacing: 0;
+
+    MicroLabel {
+        text: (is-share ? "MY SHARES / " : "CONNECTIONS / ") + item.label.to-uppercase();
+        height: 14px;
+        overflow: elide;
+    }
+
+    VerticalLayout {
+        padding-top: 22px;
+        if !error : StatusRow { shape: shape; text: status-text; tone: tone; elapsed: active ? elapsed : ""; }
+        if error : StatusRow { shape: "error"; text: item.error; sentence: true; }
+    }
+
+    // Name — or its inline editor.
+    if !renaming : Text {
+        text: item.label;
+        font-size: 30px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        color: Theme.text-primary;
+        overflow: elide;
+        height: 46px;
+        vertical-alignment: bottom;
+    }
+    if renaming : Rectangle {
+        height: 46px;
+        // Focus once the editor exists; focusing from init re-enters layout.
+        property <bool> focus-pending: true;
+        Timer {
+            interval: 16ms;
+            running: focus-pending;
+            triggered => { focus-pending = false; rename-input.focus(); }
+        }
+        HorizontalLayout {
+        padding-top: 8px;
+        spacing: 12px;
+        Rectangle {
+            horizontal-stretch: 1;
+            max-width: 420px;
+            rename-input := TextInput {
+                x: 0;
+                width: parent.width;
+                height: parent.height - 4px;
+                font-size: 30px;
+                font-weight: 600;
+                letter-spacing: -0.5px;
+                color: Theme.text-primary;
+                single-line: true;
+                vertical-alignment: bottom;
+                text <=> root.rename-text;
+                accessible-label: "Name";
+                accepted => { root.rename(item.role, item.id, root.rename-text); root.renaming = false; }
+                key-pressed(event) => {
+                    if (event.text == Key.Escape) { root.renaming = false; return accept; }
+                    return reject;
+                }
+            }
+            Rectangle { y: parent.height - 2px; height: 1.5px; background: Theme.text-primary; }
+        }
+        Rectangle {
+            width: 130px;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                padding-top: 10px;
+                MicroButton { text: "DONE"; clicked => { root.rename(item.role, item.id, root.rename-text); root.renaming = false; } }
+                MicroButton { text: "CANCEL"; text-color: Theme.text-muted; clicked => { root.renaming = false; } }
+            }
+        }
+        }
+    }
+
+    if error : VerticalLayout {
+        padding-top: 8px;
+        spacing: 6px;
+        alignment: start;
+        if item.error-detail != "" : DataText { text: item.error-detail; color: Theme.text-muted; wrap: word-wrap; }
+        HorizontalLayout {
+            alignment: start;
+            MicroButton { text: "RETRY →"; clicked => { root.retry(item.role, item.id); } }
+        }
+    }
+
+    if active : VerticalLayout {
+        padding-top: 16px;
+        Barcode { bars: root.bars; bar-height: 26px; }
+    }
+
+    VerticalLayout {
+        padding-top: 22px;
+        Card {
+            VerticalLayout {
+                InfoRow { label: "LINK"; value: item.link == "" ? "—" : item.link; copyable: item.url != ""; copy => { root.copy(item.url); } }
+                InfoRow { label: "CREATED"; value: item.created == "" ? "—" : item.created; }
+                InfoRow { label: "LAST ACTIVITY"; value: item.last-activity == "" ? "—" : item.last-activity; divider: false; }
+            }
+        }
+    }
+
+    VerticalLayout {
+        padding-top: 22px;
+        Card {
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 14px;
+                padding-bottom: 14px;
+                spacing: 14px;
+                alignment: start;
+                Rectangle {
+                    width: 40px;
+                    SporaToggle {
+                        on: root.on;
+                        label: item.label;
+                        y: (parent.height - self.height) / 2;
+                        toggled(v) => { root.toggle(item.id, item.role, v); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text { text: toggle-title; font-size: 13.5px; font-weight: 600; color: Theme.text-primary; }
+                    BodySmText { text: toggle-hint; }
+                }
+            }
+        }
+    }
+
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        height: 32px;
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            if is-share && item.url != "" : MicroButton {
+                text: "SHARE AGAIN";
+                clicked => { root.copy(item.url); }
+                Rectangle { width: 14px; ShareAgainIcon { size: 14px; weight: 1.5px; y: (parent.height - self.height) / 2; } }
+            }
+            MicroButton { text: "RENAME"; clicked => { root.rename-text = item.label; root.renaming = true; } }
+            MicroButton {
+                text: is-share ? "DELETE SHARE" : "DELETE CONNECTION";
+                text-color: Theme.error;
+                enabled: !on;
+                clicked => { root.delete(item.role, item.id); }
+            }
+        }
+        if on : BodySmText {
+            text: is-share ? "To delete, stop sharing first." : "To delete, disconnect first.";
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            wrap: no-wrap;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if !on : Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+// ── First launch / empty (2b) ────────────────────────────────────────
+
+export component EmptyPane inherits Rectangle {
+    callback share-new();
+    callback connect-new();
+    VerticalLayout {
+        alignment: center;
+        padding: 30px;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("assets/logo-icon.svg");
+                height: 46px;
+                width: 33px;
+                image-fit: contain;
+                opacity: 0.9;
+            }
+        }
+        Text {
+            text: "Your connections will appear here";
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            height: self.preferred-height + 18px;
+            vertical-alignment: bottom;
+        }
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 8px;
+            BodyText {
+                text: "Share your internet or connect via a friend — links travel by messenger.";
+                width: 360px;
+                horizontal-alignment: center;
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            padding-top: 26px;
+            VerticalLayout {
+                width: 400px;
+                spacing: 12px;
+                ActionCard {
+                    height: 150px;
+                    eyebrow: "CREATE A LINK";
+                    title: "Share your internet";
+                    subtitle: "Send a link to someone you trust.";
+                    clicked => { root.share-new(); }
+                }
+                ActionCard {
+                    height: 86px;
+                    secondary: true;
+                    eyebrow: "HAVE A LINK?";
+                    title: "Connect via friend";
+                    subtitle: "Paste the link a friend sent you.";
+                    clicked => { root.connect-new(); }
+                }
+            }
+        }
+    }
+}
+
+// ── The busy moment (3a) ─────────────────────────────────────────────
+
+export component CreatingPane inherits VerticalLayout {
+    callback cancel();
+    padding-left: 30px;
+    padding-right: 30px;
+    padding-top: 20px;
+    padding-bottom: 26px;
+    spacing: 0;
+    alignment: start;
+
+    MicroLabel { text: "NEW SHARE"; height: 12px; }
+    VerticalLayout {
+        padding-top: 20px;
+        StatusRow { shape: "pending"; text: "↑ CREATING LINK…"; tone: "pending"; }
+    }
+    Text {
+        text: "One second…";
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        color: Theme.text-primary;
+        height: 40px;
+        vertical-alignment: bottom;
+    }
+    HorizontalLayout {
+        alignment: start;
+        padding-top: 6px;
+        BodySmText { text: "The link will appear here — just copy and send it."; max-width: 340px; }
+    }
+    VerticalLayout {
+        padding-top: 20px;
+        Card {
+            opacity: 0.55;
+            height: 56px;
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                alignment: space-between;
+                spacing: 14px;
+                Text {
+                    text: "spora.to/s/··········";
+                    font-family: Theme.font-mono;
+                    font-size: 15px;
+                    font-weight: 500;
+                    color: Theme.text-muted;
+                    vertical-alignment: center;
+                }
+                Rectangle { width: 16px; CopyIcon { size: 16px; weight: 1.5px; color: Theme.text-muted; y: (parent.height - self.height) / 2; } }
+            }
+        }
+    }
+    HorizontalLayout {
+        alignment: end;
+        padding-top: 16px;
+        MicroButton { text: "CANCEL"; text-color: Theme.text-muted; clicked => { root.cancel(); } }
+    }
+}
+
+// ── The create-share handoff (2c) ────────────────────────────────────
+
+export component NewSharePane inherits VerticalLayout {
+    in property <ConnectionItem> item;
+    in property <string> elapsed;
+    in-out property <string> name;
+    callback copy(text: string);
+    callback done(id: string, label: string);
+    // Focus the name once the pane exists (focusing from init re-enters
+    // layout and panics).
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => { root.focus-pending = false; name-field.focus-input(); }
+    }
+
+    property <bool> active: item.status == "sharing";
+    property <bool> pending: item.status == "starting";
+    property <bool> error: item.status == "error";
+
+    padding-left: 30px;
+    padding-right: 30px;
+    padding-top: 20px;
+    padding-bottom: 26px;
+    spacing: 0;
+
+    VerticalLayout {
+    alignment: start;
+    vertical-stretch: 1;
+    spacing: 0;
+
+    MicroLabel { text: "NEW SHARE — LINK READY"; height: 12px; }
+    VerticalLayout {
+        padding-top: 22px;
+        if !error : StatusRow {
+            shape: active ? "active" : pending ? "pending" : "";
+            text: active ? "↑ SHARING" : pending ? "↑ STARTING…" : "INACTIVE";
+            tone: active ? "success" : pending ? "pending" : "muted";
+            elapsed: active ? root.elapsed : "";
+        }
+        if error : StatusRow { shape: "error"; text: item.error; sentence: true; }
+    }
+    Text {
+        text: item.label;
+        font-size: 30px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+        color: Theme.text-primary;
+        overflow: elide;
+        height: 46px;
+        vertical-alignment: bottom;
+    }
+    VerticalLayout {
+        padding-top: 22px;
+        Card {
+            height: 56px;
+            accessible-role: button;
+            accessible-label: "Link";
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                alignment: space-between;
+                spacing: 14px;
+                Text {
+                    text: item.link;
+                    font-family: Theme.font-mono;
+                    font-size: 15px;
+                    font-weight: 500;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Rectangle { width: 16px; CopyIcon { size: 16px; weight: 1.5px; color: Theme.text-muted; y: (parent.height - self.height) / 2; } }
+            }
+            TouchArea { mouse-cursor: pointer; clicked => { root.copy(item.url); } }
+        }
+    }
+    VerticalLayout {
+        padding-top: 14px;
+        ActionButton { text: "COPY LINK"; clicked => { root.copy(item.url); } }
+    }
+    VerticalLayout {
+        padding-top: 10px;
+        BodySmText { text: "Send it in a messenger to someone you trust."; }
+    }
+    HorizontalLayout {
+        alignment: start;
+        padding-top: 26px;
+        name-field := InputField {
+            width: 400px;
+            label: "NAME";
+            name: "Name";
+            placeholder: "Mom's phone";
+            helper: "A name helps you tell who is using your internet.";
+            text <=> root.name;
+            accepted => { root.done(item.id, root.name); }
+        }
+    }
+    }
+    HorizontalLayout {
+        alignment: end;
+        height: 32px;
+        MicroButton { text: "DONE"; clicked => { root.done(item.id, root.name); } }
+    }
+}

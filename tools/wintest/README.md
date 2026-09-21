@@ -13,8 +13,12 @@ wt deploy                 # cargo build (release, gnu target) + swap exes into t
 wt run [spora-url]        # launch the UI on the desktop, parked top-left
 wt shot [name]            # -> target/wintest/shots/<name>.png
 wt tree                   # AccessKit tree with window-relative bounds
-wt click 'Share Your Internet' | wt click 244 237 | wt type text | wt keys '{ENTER}' | wt paste text
+wt click 'Share your internet' | wt click 244 237 | wt type text | wt keys '{ENTER}' | wt paste text
+wt tray                   # click the tray icon (UI Automation) -> opens/closes the flyout
+wt shot name --flyout     # PNG of the flyout window
+wt toasts                 # toasts the client delivered (Action Center history)
 wt log [--ui|--core]      # service log (%PROGRAMDATA%\Spora) and UI log (%LOCALAPPDATA%\Spora)
+wt vnc                    # mirror the box's desktop over VNC (SSH-tunnelled); wt vnc install sets it up
 wt peer-share             # sharer on the lab node, prints the spora URL to feed `wt run`
 wt help                   # everything else
 ```
@@ -55,6 +59,44 @@ would, and talks to the installed `Spora` service over its named pipe. The
 install directory is read from the installer's registry key (32-bit view) or
 the service's binary path, not assumed.
 
+### Seeded UI states
+
+The client seeds every screen from `SPORA_UI_DEMO` (`states`, `share`,
+`empty`, `new`, `creating`, `banner`) without touching the service or the
+saved connections, and `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout
+(`only` hides the main window so `wt shot` finds the flyout). `wt run`
+sets no environment, so launch through the desktop helper:
+
+```
+wt ps '$env:SPORA_UI_DEMO="states"; Start-Ui'; wt shot win-states; wt kill
+```
+
+### The tray icon and the flyout
+
+Windows parks a new notification-area icon in the hidden-icons overflow.
+`wt tray` (`Invoke-TrayIcon`) finds it through UI Automation — its name is
+"Spora" plus the tooltip, e.g. `Spora Spora — OFFLINE` — opening the
+overflow ("Show Hidden Icons") when needed, and invokes it, which toggles
+the flyout. `wt shot NAME --flyout` captures the flyout window (the
+smallest titled Spora window) with PrintWindow. While the icon sits in the
+overflow, `wt tray` always ends with the flyout open: opening the overflow
+takes focus (which closes the flyout) seconds before the icon is invoked, so
+the client rightly treats the invoke as a fresh open. A click on a visible
+icon toggles, because its button-down closes the flyout and its button-up
+arrives within the client's 400 ms guard. To test the toggle, promote the
+icon to the visible tray once (Settings › Personalization › Taskbar › Other
+system tray icons, or `IsPromoted=1` under
+`HKCU\Control Panel\NotifyIconSettings\<id>` for `spora-winui.exe`). Closing the main window
+hides it to the tray; "Open Spora" in the flyout or the tray menu brings it
+back. The tray icon's tooltip is the aggregate status, so `wt tray` also
+prints it.
+
+Toast popups cannot be captured reliably here either, but the notification
+platform keeps what was delivered: `wt toasts` lists the client's toasts
+(`ToastNotificationManager.History` for the `Spora.Client` AppUserModelId,
+which the client registers under `HKCU\Software\Classes\AppUserModelId`
+on start) with their text.
+
 ### Coordinates and the accessibility tree
 
 `spora-winui` is built with Slint's `accessibility` feature, so AccessKit
@@ -89,6 +131,60 @@ repainting and stopped applying its async status updates (it stayed on
 "Connecting..." with the tunnel up); a deliberate minimise/restore on a
 fresh instance did not reproduce it, so the trigger is unknown.
 
+### Watching the desktop over VNC
+
+`wt vnc` mirrors the box's console desktop so you can drive it by hand
+without fetching the laptop. `wt vnc` alone opens the tunnel and a viewer;
+`wt vnc tunnel` / `wt vnc down` manage just the tunnel, `wt vnc status`
+reports service, listener and tunnel, and `wt vnc install` sets it up (it is
+idempotent, so it doubles as a repair).
+
+VNC and not RDP, for two reasons. The box is Windows 11 **Home**, which does
+not host RDP at all; and RDP would take over the console session and leave it
+detached on disconnect, which is precisely what kills `SporaTestAgent` and
+turns every screenshot black. VNC mirrors the existing session instead, so
+watching costs nothing: `wt shot`, `wt tree` and `wt click` keep working with
+a viewer attached, and the agent heartbeat is unaffected (verified).
+
+`wt vnc install` puts TightVNC 2.8.88 on the box (`win/vnc.ps1`, MSI verified
+against a pinned SHA-256) configured so that:
+
+- it listens on **127.0.0.1 only** (`LoopbackOnly`), with no firewall
+  exception, so the SSH tunnel is the only way in and VNC's weak 8-character
+  auth never faces the LAN. The password is generated on first install into
+  `~/.config/spora-wintest/vnc-password` (override with `WT_VNC_PWFILE`).
+- `DisconnectAction=0` — closing the viewer does not lock or log off, which
+  would take the agent's desktop with it.
+- `BlockLocalInput=0` — the agent injects input into this same session
+  through SendKeys/UIA, and blocking local input would break every `wt click`.
+- `RemoveWallpaper=0`, so attaching a viewer does not change what screenshots
+  see.
+- **`UseD3D=0`** — see below.
+
+The local end of the tunnel defaults to port **5901**, not 5900: this
+workstation already runs an `x11vnc` on 5900 for display `:99`. The forward
+uses `ExitOnForwardFailure=yes`, so a busy local port fails loudly instead of
+quietly leaving you looking at the wrong machine's desktop. `WT_VNC_PORT`
+moves it.
+
+#### UseD3D=0 is required on this box
+
+With TightVNC's default D3D capture the framebuffer arrives **solid black**,
+while authentication, the framebuffer geometry (1366x768) and input injection
+all work normally — and while `wt shot --screen`, taken from the desktop
+session at the same moment, shows a perfectly normal desktop. Measured mean
+framebuffer brightness was 0.15 with D3D on and 182 with it off, confirmed by
+toggling the setting back and forth. `win/vnc.ps1` therefore forces GDI
+capture by writing `HKLM\SOFTWARE\TightVNC\Server\UseD3D = 0` and restarting
+the service. It has to be a registry write: the MSI declares `SET_USED3D` and
+`VALUE_OF_USED3D` in its Property table, but 2.8.88 never writes the value --
+a fresh install passing those properties leaves `UseD3D` absent and the screen
+black. If a reinstall ever shows black again, check that value first.
+
+Note this is a different failure from the frozen `wt shot --screen` described
+above: that one returns a stale but real desktop, this one returns black.
+
+
 ## What the first run showed
 
 Recorded here so the next person does not rediscover it:
@@ -100,10 +196,10 @@ Recorded here so the next person does not rediscover it:
 - The UI window is taller than the laptop's work area (707px frame on a 768px
   screen with a 48px taskbar); the tab bar is off-screen at winit's default
   placement.
-- On the Share card only the "+" is interactive, not the card body; the
-  same holds for "Connect via Friend".
-- Every imported `spora:` URL becomes a new "Imported link" entry, even for
-  a URL that is already saved.
+- (Fixed by the redesign) On the old Share card only the "+" was
+  interactive, and every imported `spora:` URL became a new "Imported link"
+  entry even when already saved; the new UI opens the connect dialog
+  prefilled for unknown links and selects/connects known ones.
 - Connect flow against the sharer peer: relay session, direct upgrade
   within a second, MTU 1414, and `curl https://ifconfig.co` from the box
   answers with the peer's address.
@@ -115,7 +211,8 @@ Recorded here so the next person does not rediscover it:
 - The test user logged on at the physical console and staying logged on.
   A locked or logged-off desktop means no agent and black screenshots. Do not
   RDP into the box while testing (a disconnected RDP session detaches the
-  desktop). It is a Windows Home edition, so RDP hosting is off anyway.
+  desktop). It is a Windows Home edition, so RDP hosting is off anyway --
+  use `wt vnc`, which mirrors the console session instead of taking it over.
 - `wt setup` registers the task and, unless `-NoPower` is passed through,
   sets display/standby/hibernate timeouts to never, lid close to "do nothing"
   and the screensaver off, so the desktop stays capturable.
@@ -142,6 +239,7 @@ tools/wintest/
   win/lib.ps1        helpers available to jobs
   win/setup.ps1      task registration + power settings (elevated)
   win/deploy.ps1     swap exes into the install, cycle the service (elevated)
+  win/vnc.ps1        install/configure TightVNC, loopback-only (elevated)
   peer/share.sh      runs on the peer: start the sharer unit, print the URL
 ```
 

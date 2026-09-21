@@ -1,0 +1,100 @@
+// Spora design tokens for the Windows client — the "Instrument" direction
+// (design-system tokens/colors.css, typography.css, spacing.css, motion.css).
+// Fonts are bundled: nothing in the UI may require network (spec §3.3.1).
+
+import "fonts/IBMPlexSans-Regular.ttf";
+import "fonts/IBMPlexSans-Medium.ttf";
+import "fonts/IBMPlexSans-SemiBold.ttf";
+import "fonts/IBMPlexSans-Bold.ttf";
+import "fonts/IBMPlexMono-Regular.ttf";
+import "fonts/IBMPlexMono-Medium.ttf";
+import "fonts/IBMPlexMono-SemiBold.ttf";
+
+export global Theme {
+    // ── base scales ──────────────────────────────────────────────────
+    out property <color> sage-100: #F6F8F4;   // card
+    out property <color> sage-200: #EFF2EE;   // text/thumb on dark
+    out property <color> sage-300: #D6DAD3;   // app background
+    out property <color> sage-400: #C2C7C1;   // toggle track off
+    out property <color> ink-900:  #1D211D;   // primary text
+    out property <color> ink-600:  #494F49;   // muted text (AA on sage-300)
+    out property <color> pine-800: #333B36;   // primary UI: buttons, toggle-on
+    out property <color> pine-900: #272E29;   // dark chrome
+    out property <color> green-600: #587536;  // success dot on light (≥3:1)
+    out property <color> green-700: #4E6B2F;  // success text on light (≥4.5:1)
+    out property <color> ember-500: #DB5F3D;  // action orange — hero cards, big affirmative ONLY
+    out property <color> ember-050: #FFF4EE;  // titles on action
+    out property <color> ember-900: #38180D;  // micro-labels on action (AA)
+    out property <color> gold-700: #8A6D14;   // pending text / ring
+    out property <color> rust-600: #AC3322;   // error
+    out property <color> rust-800: #7E2013;   // error emphasis
+
+    // ── semantic aliases ─────────────────────────────────────────────
+    out property <color> surface-bg: #D6DAD3;
+    out property <color> surface-card: #F6F8F4;
+    out property <color> surface-error-tint: #AC3322.with-alpha(8%);
+    out property <color> text-primary: #1D211D;
+    out property <color> text-muted: #494F49;
+    out property <color> text-placeholder: #494F49.with-alpha(55%);
+    out property <color> text-on-dark: #EFF2EE;
+    out property <color> text-on-dark-muted: #99A29A;
+    out property <color> color-primary: #333B36;
+    out property <color> color-action: #DB5F3D;
+    out property <color> color-action-pressed: #C9532F;
+    out property <color> on-action-title: #FFF4EE;
+    out property <color> on-action-micro: #38180D;
+    out property <color> success-dot: #587536;
+    out property <color> success-text: #4E6B2F;
+    out property <color> pending-text: #8A6D14;
+    out property <color> error: #AC3322;
+    out property <color> error-strong: #7E2013;
+    out property <color> border-hairline: #1C201C.with-alpha(15%);
+    out property <color> border-divider: #1C201C.with-alpha(10%);
+    out property <color> border-strong: #1C201C.with-alpha(35%);
+    out property <color> border-error: #AC3322.with-alpha(50%);
+    // Desktop addition: rows and micro-buttons get a quiet hover wash.
+    out property <color> hover: #1C201C.with-alpha(5%);
+    out property <color> pressed: #1C201C.with-alpha(9%);
+    out property <color> smoke: #000000.with-alpha(30%);
+
+    // ── type ─────────────────────────────────────────────────────────
+    out property <string> font-sans: "IBM Plex Sans";
+    out property <string> font-mono: "IBM Plex Mono";
+
+    // ── radii (the "Instrument" scale) ───────────────────────────────
+    out property <length> radius-hero: 16px;
+    out property <length> radius-card: 10px;
+    out property <length> radius-button: 10px;
+    out property <length> radius-row: 7px;
+    out property <length> radius-dialog: 8px;
+    out property <length> radius-toggle: 3px;
+    out property <length> radius-thumb: 1px;
+
+    // ── motion — calm and short ──────────────────────────────────────
+    out property <duration> quick: 150ms;
+    out property <duration> standard: 220ms;
+    out property <easing> ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+// ── Models shared with Rust ──────────────────────────────────────────
+
+export struct ConnectionItem {
+    id: string,
+    role: string,          // "share" | "use"
+    label: string,
+    url: string,           // the spora.to link (share: once known, cached)
+    link: string,          // the link as shown: "spora.to/s/…" (no scheme)
+    status: string,        // "inactive" | "starting" | "sharing" | "connecting" | "connected" | "error"
+    error: string,         // friendly sentence when status == "error"
+    error-detail: string,  // the underlying message, for the curious
+    created: string,       // "12 June 2026" or ""
+    last-activity: string, // "today, 14:07" or ""
+    seed: int,             // barcode seed
+}
+
+export struct StatusLine {
+    shape: string,         // "active" | "pending" | "error" | ""  (no shape)
+    text: string,          // window form, already uppercase, with the ↑/↓ arrow
+    short: string,         // flyout-header form (no names: the rows carry them)
+    tone: string,          // "success" | "pending" | "error" | "muted"
+}

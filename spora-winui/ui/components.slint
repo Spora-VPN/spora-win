@@ -1,0 +1,565 @@
+// Spora components for the Windows client — the design-system component set
+// (StatusDot, MicroLabel, Button, InputField, SporaToggle, Barcode, ActionCard)
+// reprojected into Slint. Every interactive element carries an accessible
+// role + label so UI Automation (and tools/wintest) can find it by name.
+
+import { Theme } from "theme.slint";
+
+// ── Type roles ───────────────────────────────────────────────────────
+
+/// Uppercase mono micro-label (section headers, breadcrumbs, micro actions).
+export component MicroLabel inherits Text {
+    font-family: Theme.font-mono;
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 1.4px;
+    color: Theme.text-muted;
+    vertical-alignment: center;
+}
+
+/// Uppercase mono status line ("↑ SHARING", "↓ CONNECTED — DANA'S HOME").
+export component StatusText inherits Text {
+    font-family: Theme.font-mono;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.6px;
+    color: Theme.text-muted;
+    vertical-alignment: center;
+}
+
+/// Mono data text — URLs, timestamps, amounts.
+export component DataText inherits Text {
+    font-family: Theme.font-mono;
+    font-size: 11px;
+    font-weight: 400;
+    color: Theme.text-primary;
+    vertical-alignment: center;
+}
+
+/// Body copy.
+export component BodyText inherits Text {
+    font-size: 13.5px;
+    font-weight: 400;
+    color: Theme.text-muted;
+    wrap: word-wrap;
+}
+
+/// Small body copy (hints, helpers).
+export component BodySmText inherits Text {
+    font-size: 11.5px;
+    font-weight: 400;
+    color: Theme.text-muted;
+    wrap: word-wrap;
+}
+
+// ── Status shape — legible without color ─────────────────────────────
+// ● filled circle = active · ○ ring = pending · ◆ diamond = error
+
+export component StatusShape inherits Rectangle {
+    in property <string> state: "active";
+    width: 8px;
+    height: 8px;
+    background: transparent;
+
+    if state == "active" : Rectangle {
+        x: 0.5px;
+        y: 0.5px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        background: Theme.success-dot;
+    }
+    if state == "pending" : Rectangle {
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        border-width: 1.8px;
+        border-color: Theme.pending-text;
+        background: transparent;
+    }
+    if state == "error" : Path {
+        x: -1px;
+        y: -1px;
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        fill: Theme.error;
+        commands: "M5 0.4 L9.6 5 L5 9.6 L0.4 5 Z";
+    }
+}
+
+/// Tone → text color for status lines.
+export global Tone {
+    pure public function color(tone: string) -> color {
+        tone == "success" ? Theme.success-text
+            : tone == "pending" ? Theme.pending-text
+            : tone == "error" ? Theme.error
+            : Theme.text-muted
+    }
+}
+
+// ── Icons — bespoke stroke set, 24px grid ────────────────────────────
+
+export component Icon inherits Path {
+    in property <length> size: 14px;
+    in property <color> color: Theme.text-primary;
+    in property <length> weight: 1.5px;
+    width: size;
+    height: size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: transparent;
+    stroke: color;
+    stroke-width: weight;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+}
+
+export component PlusIcon inherits Icon { commands: "M12 5v14 M5 12h14"; }
+export component CopyIcon inherits Icon { commands: "M11 9h7a2 2 0 0 1 2 2v7a2 2 0 0 1 -2 2h-7a2 2 0 0 1 -2 -2v-7a2 2 0 0 1 2 -2z M5 15V5a2 2 0 0 1 2 -2h10"; }
+export component ShareAgainIcon inherits Icon { commands: "M12 15V4 M8 7.5L12 3.5l4 4 M5 13v6.5h14V13"; }
+export component TrashIcon inherits Icon { commands: "M5 7h14 M10 7V5h4v2 M7 7l0.9 12.5h8.2L17 7"; }
+export component ArrowIcon inherits Icon { commands: "M5 12h14 M12 5l7 7-7 7"; }
+/// The hero card's −45° arrow, pre-rotated so no transform is needed.
+export component ArrowNEIcon inherits Icon { commands: "M6 18L18 6 M8 6h10v10"; }
+export component ExternalIcon inherits Icon { commands: "M14 4h6v6 M20 4L11 13 M18 13v5.5A2.5 2.5 0 0 1 15.5 21H5.5A2.5 2.5 0 0 1 3 18.5V8.5A2.5 2.5 0 0 1 5.5 6H11"; }
+
+// ── The squared toggle — brand invariant §3.1 ────────────────────────
+
+export component SporaToggle inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> label;
+    /// Vertical extent of the hit area: 48px (a11y invariant) unless the
+    /// host row is denser, in which case the row sets it to its own height.
+    in property <length> hit-height: 48px;
+    callback toggled(bool);
+
+    width: 40px;
+    height: 22px;
+    border-radius: Theme.radius-toggle;
+    background: on ? Theme.color-primary : Theme.sage-400;
+    opacity: enabled ? 1 : 0.5;
+    animate background { duration: Theme.quick; easing: Theme.ease; }
+
+    accessible-role: switch;
+    accessible-checked: on;
+    accessible-label: label;
+    accessible-enabled: enabled;
+    accessible-action-default => { root.toggled(!root.on); }
+
+    thumb := Rectangle {
+        x: on ? 21px : 3px;
+        y: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: Theme.radius-thumb;
+        background: on ? Theme.sage-200 : Theme.surface-card;
+        border-width: on ? 0 : 1px;
+        border-color: #1C201C.with-alpha(12%);
+        animate x { duration: Theme.quick; easing: Theme.ease; }
+    }
+
+    // 48px effective hit target around the 40×22 visual (a11y invariant).
+    TouchArea {
+        x: -13px;
+        y: (root.height - root.hit-height) / 2;
+        width: 66px;
+        height: root.hit-height;
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.toggled(!root.on); }
+    }
+}
+
+// ── Buttons ──────────────────────────────────────────────────────────
+
+/// Primary button: pine, 10px corners, uppercase, trailing arrow.
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> trailing-arrow: true;
+    callback clicked();
+
+    height: 48px;
+    border-radius: Theme.radius-button;
+    background: ta.pressed ? #2A312D : Theme.color-primary;
+    opacity: enabled ? 1 : 0.55;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        alignment: space-between;
+        Text {
+            text: root.text;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: Theme.text-on-dark;
+            vertical-alignment: center;
+        }
+        if trailing-arrow : Rectangle {
+            width: 18px;
+            ArrowIcon { size: 18px; weight: 1.8px; color: Theme.text-on-dark; y: (parent.height - self.height) / 2; }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Action button: ember — big affirmative only ("COPY LINK").
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+
+    height: 52px;
+    border-radius: Theme.radius-hero;
+    background: ta.pressed ? Theme.color-action-pressed : Theme.color-action;
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 8px;
+    drop-shadow-color: #96371E.with-alpha(30%);
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        alignment: space-between;
+        Text {
+            text: root.text;
+            font-size: 15px;
+            font-weight: 600;
+            letter-spacing: 0.8px;
+            color: Theme.on-action-title;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            width: 18px;
+            ArrowIcon { size: 18px; weight: 1.8px; color: Theme.on-action-title; y: (parent.height - self.height) / 2; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Text button: a centred micro-label ("CANCEL").
+export component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: Theme.text-muted;
+    callback clicked();
+
+    height: 40px;
+    border-radius: Theme.radius-row;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+
+    MicroLabel {
+        text: root.text;
+        color: root.text-color;
+        horizontal-alignment: center;
+        width: parent.width;
+        height: parent.height;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Inline micro action ("DONE", "RETRY →", "DELETE CONNECTION"): a micro-label
+/// with a generous hit area and an optional leading icon slot.
+export component MicroButton inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: Theme.text-primary;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 32px;
+    width: content.preferred-width + 12px;
+    border-radius: 6px;
+    background: ta.has-hover && enabled ? Theme.hover : transparent;
+    opacity: enabled ? 1 : 0.55;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-enabled: enabled;
+    accessible-action-default => { root.clicked(); }
+
+    content := HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 6px;
+        spacing: 8px;
+        @children
+        MicroLabel { text: root.text; color: root.text-color; }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: enabled ? MouseCursor.pointer : MouseCursor.default;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Input field — underline only ─────────────────────────────────────
+
+export component InputField inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <string> helper;
+    in property <string> error;
+    in property <string> name;   // accessible name
+    callback accepted();
+    callback edited();
+    public function focus-input() { input.focus(); }
+
+    spacing: 0;
+    MicroLabel { text: root.label; height: 12px; }
+    Rectangle {
+        height: 42px;
+        input := TextInput {
+            x: 0;
+            y: 6px;
+            width: parent.width;
+            height: 30px;
+            font-size: 21px;
+            font-weight: 400;
+            color: Theme.text-primary;
+            single-line: true;
+            vertical-alignment: center;
+            text <=> root.text;
+            accessible-label: root.name != "" ? root.name : root.label;
+            accepted => { root.accepted(); }
+            edited => { root.edited(); }
+        }
+        if root.text == "" : Text {
+            x: 0;
+            y: 6px;
+            height: 30px;
+            text: root.placeholder;
+            font-size: 21px;
+            color: Theme.text-placeholder;
+            vertical-alignment: center;
+        }
+        Rectangle {
+            y: parent.height - self.height;
+            height: root.error != "" ? 2px : 1.5px;
+            background: root.error != "" ? Theme.error : Theme.text-primary;
+        }
+    }
+    if root.error != "" : HorizontalLayout {
+        padding-top: 8px;
+        spacing: 7px;
+        Rectangle { width: 8px; StatusShape { state: "error"; y: (parent.height - self.height) / 2; } }
+        Text {
+            text: root.error;
+            font-size: 12px;
+            color: Theme.error;
+            vertical-alignment: center;
+        }
+    }
+    if root.error == "" && root.helper != "" : Text {
+        text: root.helper;
+        font-size: 11px;
+        color: Theme.text-muted;
+        wrap: word-wrap;
+        // the 8px gap the helper sits below the underline
+        height: self.preferred-height + 8px;
+        vertical-alignment: bottom;
+    }
+}
+
+// ── Barcode — the only data-viz motif ────────────────────────────────
+// Rows of 2px bars, 3 quantized heights; `bars` holds 0.3 / 0.6 / 1.0
+// factors precomputed deterministically from the item's seed (Rust).
+
+export component Barcode inherits Rectangle {
+    in property <[float]> bars;
+    in property <length> bar-height: 26px;
+    in property <color> bar-color: Theme.success-dot;
+    height: bar-height;
+    clip: true;
+    // Bars are placed absolutely (not in a layout) so the strip never imposes
+    // a minimum width on its pane: it simply clips at the edge.
+    for f[i] in bars : Rectangle {
+        x: i * 4px;
+        y: root.height - self.height;
+        width: 2px;
+        height: root.bar-height * f;
+        border-radius: 1px;
+        background: root.bar-color;
+        opacity: 0.75;
+    }
+}
+
+// ── Hero action card ─────────────────────────────────────────────────
+
+export component ActionCard inherits Rectangle {
+    in property <string> eyebrow;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> secondary: false;
+    callback clicked();
+
+    border-radius: Theme.radius-hero;
+    background: secondary ? #F6F8F4.with-alpha(45%) : (ta.pressed ? Theme.color-action-pressed : Theme.color-action);
+    border-width: secondary ? 1.5px : 0;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: secondary ? 0 : 20px;
+    drop-shadow-offset-y: secondary ? 0 : 10px;
+    drop-shadow-color: secondary ? transparent : #96371E.with-alpha(32%);
+    accessible-role: button;
+    accessible-label: title;
+    accessible-action-default => { root.clicked(); }
+
+    if !secondary : VerticalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        padding-top: 20px;
+        padding-bottom: 16px;
+        spacing: 12px;
+        VerticalLayout {
+            spacing: 9px;
+            Text {
+                text: root.eyebrow;
+                font-family: Theme.font-mono;
+                font-size: 10px;
+                font-weight: 500;
+                letter-spacing: 1.6px;
+                color: Theme.on-action-micro;
+            }
+            Text {
+                text: root.title;
+                font-size: 26px;
+                font-weight: 600;
+                letter-spacing: -0.5px;
+                color: Theme.on-action-title;
+                wrap: word-wrap;
+            }
+        }
+        HorizontalLayout {
+            alignment: space-between;
+            spacing: 12px;
+            Text {
+                text: root.subtitle;
+                font-size: 12.5px;
+                color: #FFF4EE.with-alpha(85%);
+                wrap: word-wrap;
+                vertical-alignment: bottom;
+                horizontal-stretch: 1;
+                max-width: 270px;
+            }
+            Rectangle {
+                width: 44px;
+                Rectangle {
+                    y: parent.height - self.height;
+                    width: 44px;
+                    height: 44px;
+                    border-radius: 22px;
+                    background: #FFFFFF.with-alpha(18%);
+                    ArrowNEIcon { size: 18px; weight: 1.8px; color: Theme.on-action-title; x: 13px; y: 13px; }
+                }
+            }
+        }
+    }
+
+    if secondary : HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        padding-top: 15px;
+        padding-bottom: 15px;
+        spacing: 14px;
+        alignment: space-between;
+        VerticalLayout {
+            alignment: center;
+            spacing: 0;
+            horizontal-stretch: 1;
+            MicroLabel { text: root.eyebrow; height: 12px; }
+            Text {
+                text: root.title;
+                font-size: 19px;
+                font-weight: 600;
+                letter-spacing: -0.2px;
+                color: Theme.text-primary;
+                height: 29px;
+                vertical-alignment: bottom;
+            }
+            BodySmText { text: root.subtitle; height: self.preferred-height + 3px; vertical-alignment: bottom; }
+        }
+        Rectangle {
+            width: 40px;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                border-width: 1.5px;
+                border-color: Theme.text-primary;
+                background: transparent;
+                ArrowNEIcon { size: 16px; weight: 1.8px; color: Theme.text-primary; x: 12px; y: 12px; }
+            }
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Card + info row primitives ───────────────────────────────────────
+
+export component Card inherits Rectangle {
+    in property <bool> error: false;
+    background: Theme.surface-card;
+    border-width: 1px;
+    border-color: error ? Theme.border-error : Theme.border-hairline;
+    border-radius: Theme.radius-card;
+}
+
+/// One "LABEL …… value" row of the detail info card.
+export component InfoRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> divider: true;
+    in property <bool> copyable: false;
+    callback copy();
+    height: 42px;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
+        alignment: space-between;
+        MicroLabel { text: root.label; }
+        HorizontalLayout {
+            spacing: 8px;
+            DataText { text: root.value; overflow: elide; horizontal-alignment: right; }
+            if root.copyable : Rectangle {
+                width: 24px;
+                border-radius: 4px;
+                background: copy-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Copy link";
+                accessible-action-default => { root.copy(); }
+                CopyIcon { size: 14px; weight: 1.4px; color: Theme.text-muted; x: 5px; y: (parent.height - self.height) / 2; }
+                copy-ta := TouchArea { mouse-cursor: pointer; clicked => { root.copy(); } }
+            }
+        }
+    }
+    if divider : Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border-divider;
+    }
+}

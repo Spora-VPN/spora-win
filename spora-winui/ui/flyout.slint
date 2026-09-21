@@ -1,0 +1,196 @@
+// The tray flyout (design canvas 1d/2e): every connection and its toggle on
+// one dense surface, the aggregate status in the header, entry actions below.
+
+import { Theme, ConnectionItem, StatusLine } from "theme.slint";
+import { MicroLabel, StatusText, StatusShape, Tone, SporaToggle, MicroButton, PlusIcon, ExternalIcon, BodySmText } from "components.slint";
+
+component FlyoutRow inherits Rectangle {
+    in property <ConnectionItem> item;
+    callback toggle(bool);
+    callback retry();
+
+    property <bool> is-share: item.role == "share";
+    property <bool> active: item.status == "sharing" || item.status == "connected";
+    property <bool> pending: item.status == "starting" || item.status == "connecting";
+    property <bool> on: active || pending;
+    property <bool> error: item.status == "error";
+    property <string> shape: active ? "active" : pending ? "pending" : error ? "error" : "";
+    property <string> status-text: is-share
+        ? (active ? "↑ SHARING" : "STARTING…")
+        : (active ? "↓ CONNECTED" : "CONNECTING…");
+
+    height: text-col.preferred-height + 18px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: list-item;
+    accessible-label: item.label;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 9px;
+        padding-bottom: 9px;
+        spacing: 10px;
+        alignment: space-between;
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            horizontal-stretch: 1;
+            Rectangle {
+                width: 8px;
+                if shape != "" : StatusShape { state: shape; y: error ? 4px : (parent.height - self.height) / 2; }
+            }
+            text-col := VerticalLayout {
+                spacing: 3px;
+                alignment: center;
+                horizontal-stretch: 1;
+                Text {
+                    text: item.label;
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: (on || error) ? Theme.text-primary : Theme.text-muted;
+                    overflow: elide;
+                }
+                if on : StatusText { text: status-text; color: active ? Theme.success-text : Theme.pending-text; }
+                if error : Text { text: item.error; font-size: 11.5px; color: Theme.error; wrap: word-wrap; }
+                if error : HorizontalLayout {
+                    alignment: start;
+                    padding-top: 3px;
+                    MicroButton { text: "RETRY →"; clicked => { root.retry(); } }
+                }
+            }
+        }
+        Rectangle {
+            width: 40px;
+            SporaToggle {
+                on: root.on;
+                label: item.label;
+                hit-height: min(48px, root.height);
+                y: error ? 0 : (parent.height - self.height) / 2;
+                toggled(v) => { root.toggle(v); }
+            }
+        }
+    }
+    ta := TouchArea {
+        // hover wash only; the toggle above takes the click
+        z: -1;
+    }
+}
+
+component FlyoutSection inherits VerticalLayout {
+    in property <string> text;
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 4px;
+    MicroLabel { text: root.text; height: 12px; }
+}
+
+component FlyoutAction inherits Rectangle {
+    in property <string> label;
+    in property <bool> plus: false;
+    in property <bool> external: false;
+    callback clicked();
+    height: 30px;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 8px;
+        alignment: space-between;
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: start;
+            if plus : Rectangle { width: 13px; PlusIcon { size: 13px; weight: 1.6px; color: Theme.text-muted; y: (parent.height - self.height) / 2; } }
+            Text { text: root.label; font-size: 12.5px; font-weight: 500; color: Theme.text-primary; vertical-alignment: center; }
+        }
+        if external : Rectangle { width: 13px; ExternalIcon { size: 13px; weight: 1.6px; color: Theme.text-muted; y: (parent.height - self.height) / 2; } }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component TrayFlyout inherits Window {
+    title: "Spora";
+    no-frame: true;
+    always-on-top: true;
+    width: 280px;
+    background: Theme.surface-card;
+    default-font-family: "IBM Plex Sans";
+    default-font-size: 13px;
+
+    in property <[ConnectionItem]> shares;
+    in property <[ConnectionItem]> uses;
+    in property <[StatusLine]> status-lines;
+    callback toggle(id: string, role: string, on: bool);
+    callback retry(role: string, id: string);
+    callback open-main();
+    callback share-new();
+    callback connect-new();
+
+    VerticalLayout {
+        padding: 1px;
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 10px;
+            alignment: space-between;
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                Image { source: @image-url("assets/logo-mark-b.svg"); height: 16px; width: 14px; image-fit: contain; y: (parent.height - self.height) / 2; }
+                Text { text: "SPORA"; font-size: 11px; font-weight: 700; letter-spacing: 2.2px; color: Theme.text-primary; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                for line in status-lines : HorizontalLayout {
+                    alignment: end;
+                    if line.tone != "error" : StatusText { text: line.short; color: Tone.color(line.tone); horizontal-alignment: right; overflow: elide; }
+                    if line.tone == "error" : Text { text: line.short; font-size: 11.5px; color: Theme.error; horizontal-alignment: right; overflow: elide; vertical-alignment: center; }
+                }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border-divider; }
+
+        if uses.length > 0 : FlyoutSection { text: "CONNECTIONS"; }
+        for item in uses : FlyoutRow {
+            item: item;
+            toggle(v) => { root.toggle(item.id, "use", v); }
+            retry => { root.retry("use", item.id); }
+        }
+        if shares.length > 0 && uses.length > 0 : VerticalLayout {
+            padding-top: 8px;
+            Rectangle { height: 1px; background: Theme.border-divider; }
+        }
+        if shares.length > 0 : FlyoutSection { text: "MY SHARES"; }
+        for item in shares : FlyoutRow {
+            item: item;
+            toggle(v) => { root.toggle(item.id, "share", v); }
+            retry => { root.retry("share", item.id); }
+        }
+        if shares.length == 0 && uses.length == 0 : VerticalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            padding-top: 12px;
+            padding-bottom: 8px;
+            BodySmText { text: "Nothing here yet."; }
+        }
+        VerticalLayout {
+            padding-top: 4px;
+            Rectangle { height: 1px; background: Theme.border-divider; }
+        }
+        VerticalLayout {
+            padding-top: 5px;
+            padding-bottom: 6px;
+            FlyoutAction { plus: true; label: "Create a link to share…"; clicked => { root.share-new(); } }
+            FlyoutAction { plus: true; label: "Connect via a link…"; clicked => { root.connect-new(); } }
+            FlyoutAction { external: true; label: "Open Spora"; clicked => { root.open-main(); } }
+        }
+    }
+    // Hairline outline (no window frame).
+    Rectangle { border-width: 1px; border-color: Theme.border-strong; background: transparent; }
+}

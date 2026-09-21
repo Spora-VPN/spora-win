@@ -1,0 +1,135 @@
+// Centered content dialogs over a smoke layer (design canvas 1g).
+
+import { Theme } from "theme.slint";
+import { MicroLabel, BodyText, InputField, PrimaryButton, TextButton } from "components.slint";
+
+component Dialog inherits Rectangle {
+    in property <length> card-width: 400px;
+    callback escape();
+    callback enter();
+    background: Theme.smoke;
+    // The smoke absorbs clicks; nothing behind it is reachable.
+    TouchArea { }
+    // Keys the inputs do not take (Escape, and Return where there is no
+    // input) bubble up here.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) { root.escape(); return accept; }
+            if (event.text == Key.Return) { root.enter(); return accept; }
+            return reject;
+        }
+    }
+    public function focus-keys() { keys.focus(); }
+    card := Rectangle {
+        width: root.card-width;
+        height: content.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Theme.surface-card;
+        border-width: 1px;
+        border-color: Theme.border-hairline;
+        border-radius: Theme.radius-dialog;
+        drop-shadow-blur: 40px;
+        drop-shadow-offset-y: 18px;
+        drop-shadow-color: #000000.with-alpha(35%);
+        TouchArea { }
+        content := VerticalLayout {
+            padding-left: 24px;
+            padding-right: 24px;
+            padding-top: 22px;
+            padding-bottom: 22px;
+            spacing: 0;
+            @children
+        }
+    }
+}
+
+export component ConnectDialog inherits Dialog {
+    in-out property <string> url;
+    in-out property <string> name;
+    in property <string> url-error;
+    in property <bool> focus-name: false;   // link came prefilled: start on the name
+    callback save(url: string, name: string);
+    callback cancel();
+    escape => { root.cancel(); }
+    enter => { root.save(root.url, root.name); }
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => {
+            root.focus-pending = false;
+            if root.focus-name { name-field.focus-input(); } else { url-field.focus-input(); }
+        }
+    }
+
+    MicroLabel { text: "NEW CONNECTION"; height: 12px; }
+    VerticalLayout {
+        padding-top: 18px;
+        url-field := InputField {
+            label: "CONNECTION LINK";
+            name: "Connection link";
+            placeholder: "spora.to/s/…";
+            text <=> root.url;
+            error: root.url-error;
+            accepted => { root.save(root.url, root.name); }
+        }
+    }
+    VerticalLayout {
+        padding-top: 20px;
+        name-field := InputField {
+            label: "NAME — OPTIONAL";
+            name: "Name";
+            placeholder: "Dana's home";
+            helper: "A name helps you tell whose connection this is.";
+            text <=> root.name;
+            accepted => { root.save(root.url, root.name); }
+        }
+    }
+    VerticalLayout {
+        padding-top: 24px;
+        spacing: 2px;
+        PrimaryButton { text: "SAVE CONNECTION"; clicked => { root.save(root.url, root.name); } }
+        TextButton { text: "CANCEL"; clicked => { root.cancel(); } }
+    }
+}
+
+export component DeleteDialog inherits Dialog {
+    in property <string> label;
+    in property <bool> is-share;
+    callback confirm();
+    callback cancel();
+    escape => { root.cancel(); }
+    enter => { root.confirm(); }
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => { root.focus-pending = false; root.focus-keys(); }
+    }
+
+    MicroLabel { text: is-share ? "DELETE SHARE" : "DELETE CONNECTION"; height: 12px; }
+    Text {
+        text: "Delete «" + root.label + "»?";
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+        color: Theme.text-primary;
+        wrap: word-wrap;
+        height: self.preferred-height + 14px;
+        vertical-alignment: bottom;
+    }
+    BodyText {
+        text: is-share
+            ? "Anyone who has this link will no longer be able to use your internet through it."
+            : "It will be removed from this list. You can add it again from the link.";
+        height: self.preferred-height + 8px;
+        vertical-alignment: bottom;
+    }
+    VerticalLayout {
+        padding-top: 24px;
+        spacing: 2px;
+        PrimaryButton { text: "DELETE"; trailing-arrow: false; clicked => { root.confirm(); } }
+        TextButton { text: "CANCEL"; clicked => { root.cancel(); } }
+    }
+}

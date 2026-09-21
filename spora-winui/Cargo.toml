@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-slint = { version = "1.15", default-features = false, features = ["backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
+slint = { version = "1.15", default-features = false, features = ["backend-winit", "renderer-software", "accessibility", "compat-1-2", "unstable-winit-030"] }
 tonic = "0.13"
 prost = "0.13"
 tokio = { version = "1", features = ["full"] }
@@ -15,8 +15,15 @@ log = "0.4"
 env_logger = "0.11"
 uuid = { version = "1", features = ["v4"] }
 arboard = "3"
+chrono = "0.4"
+# Tray icon (state-shaped, rendered from the mono mark at runtime) + its
+# right-click menu. Both are cross-platform crates, gated to Windows below.
+resvg = "0.46"
 
 [target.'cfg(windows)'.dependencies]
+tray-icon = "0.25"
+# Windows toast notifications (WinRT) for sharing started / connected / lost.
+tauri-winrt-notification = "0.8"
 # Named-pipe connector for the gRPC channel to the wincore service.
 tower = { version = "0.5", features = ["util"] }
 hyper-util = "0.1"
@@ -25,6 +32,9 @@ windows-sys = { version = "0.52", features = [
     # CreateFileW is gated on Win32_Security (it takes a SECURITY_ATTRIBUTES).
     "Win32_Security",
     "Win32_Storage_FileSystem",
+    # Tray icon size + taskbar theme (tray.rs), toast attribution key (toast.rs).
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Registry",
 ] }
 
 [build-dependencies]

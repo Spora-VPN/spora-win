@@ -1,0 +1,216 @@
+// The sidebar IS the connection list (design canvas 1b/2a): lockup, the
+// aggregate status block, both role sections with shape-coded rows, and the
+// two entry actions at the foot.
+
+import { Theme, ConnectionItem, StatusLine } from "theme.slint";
+import { MicroLabel, StatusText, StatusShape, Tone, PlusIcon, BodySmText } from "components.slint";
+
+/// One list row: name ellipsizes before the shape (the dot never clips).
+component SidebarRow inherits Rectangle {
+    in property <ConnectionItem> item;
+    in property <bool> selected;
+    callback clicked();
+
+    property <bool> active: item.status == "sharing" || item.status == "connected";
+    property <bool> pending: item.status == "starting" || item.status == "connecting";
+    property <string> shape: active ? "active" : pending ? "pending" : item.status == "error" ? "error" : "";
+
+    height: 36px;
+    border-radius: Theme.radius-row;
+    background: selected ? Theme.surface-bg : ta.has-hover ? Theme.hover : transparent;
+    border-width: selected ? 1px : 0;
+    border-color: Theme.border-hairline;
+    accessible-role: list-item;
+    accessible-label: item.label;
+    accessible-action-default => { root.clicked(); }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: space-between;
+        Text {
+            text: item.label;
+            font-size: 13px;
+            font-weight: selected ? 600 : 500;
+            color: (item.status == "inactive" && !selected) ? Theme.text-muted : Theme.text-primary;
+            overflow: elide;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        if shape != "" : Rectangle {
+            width: 8px;
+            StatusShape { state: shape; y: (parent.height - self.height) / 2; }
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component SectionHeader inherits VerticalLayout {
+    in property <string> text;
+    padding-left: 18px;
+    padding-right: 18px;
+    padding-top: 20px;
+    padding-bottom: 8px;
+    MicroLabel { text: root.text; height: 12px; }
+}
+
+component EmptyHint inherits VerticalLayout {
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-top: 9px;
+    padding-bottom: 9px;
+    BodySmText { text: "Nothing here yet."; }
+}
+
+component FooterAction inherits Rectangle {
+    in property <string> label;
+    callback clicked();
+    height: 34px;
+    border-radius: Theme.radius-row;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 9px;
+        alignment: start;
+        Rectangle {
+            width: 14px;
+            PlusIcon { size: 14px; weight: 1.6px; y: (parent.height - self.height) / 2; }
+        }
+        Text {
+            text: root.label;
+            font-size: 12.5px;
+            font-weight: 500;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[ConnectionItem]> shares;
+    in property <[ConnectionItem]> uses;
+    in property <[StatusLine]> status-lines;
+    in property <string> selected-id;
+    in property <string> selected-role;
+    callback select(role: string, id: string);
+    callback share-new();
+    callback connect-new();
+
+    width: 248px;
+    background: Theme.surface-card;
+
+    VerticalLayout {
+        // Lockup: mark + typeset wordmark.
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-top: 20px;
+            spacing: 9px;
+            alignment: start;
+            height: 40px;
+            Image {
+                source: @image-url("assets/logo-mark-b.svg");
+                height: 20px;
+                width: 17px;
+                image-fit: contain;
+            }
+            Text {
+                text: "SPORA";
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 2.4px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+
+        // Aggregate status — the at-a-glance answer inside the window.
+        VerticalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            padding-top: 13px;
+            spacing: 3px;
+            // 14px, not the design's 12: an elided Text renders nothing when
+            // its box is shorter than one line of its font.
+            for line in status-lines : HorizontalLayout {
+                spacing: 6px;
+                height: 14px;
+                if line.shape != "" : Rectangle {
+                    width: 8px;
+                    StatusShape { state: line.shape; y: (parent.height - self.height) / 2; }
+                }
+                if line.tone != "error" : StatusText {
+                    text: line.text;
+                    color: Tone.color(line.tone);
+                    overflow: elide;
+                }
+                if line.tone == "error" : Text {
+                    text: line.text;
+                    font-size: 11.5px;
+                    color: Theme.error;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        Flickable {
+            vertical-stretch: 1;
+            VerticalLayout {
+                alignment: start;
+                SectionHeader { text: "MY SHARES"; }
+                if shares.length == 0 : EmptyHint { }
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 2px;
+                    for item in shares : SidebarRow {
+                        item: item;
+                        selected: root.selected-role == "share" && root.selected-id == item.id;
+                        clicked => { root.select("share", item.id); }
+                    }
+                }
+                SectionHeader { text: "CONNECTIONS"; }
+                if uses.length == 0 : EmptyHint { }
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-bottom: 12px;
+                    spacing: 2px;
+                    for item in uses : SidebarRow {
+                        item: item;
+                        selected: root.selected-role == "use" && root.selected-id == item.id;
+                        clicked => { root.select("use", item.id); }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 1px; background: Theme.border-divider; }
+        VerticalLayout {
+            padding: 10px;
+            padding-bottom: 12px;
+            spacing: 2px;
+            FooterAction { label: "Share your internet"; clicked => { root.share-new(); } }
+            FooterAction { label: "Connect via friend"; clicked => { root.connect-new(); } }
+        }
+    }
+
+    // Right hairline.
+    Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.border-hairline;
+    }
+}

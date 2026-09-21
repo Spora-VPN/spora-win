@@ -212,16 +212,17 @@ function Stop-Ui {
 # are cropped to the DWM frame so image coordinates match `wt tree`/`wt click`.
 # -Composited captures the window region from the screen instead.
 function Save-Screenshot {
-    param([string]$Name, [switch]$Screen, [switch]$NoRaise, [switch]$Composited)
+    param([string]$Name, [switch]$Screen, [switch]$NoRaise, [switch]$Composited, [switch]$Flyout)
     if (-not $Name) { $Name = Get-Date -Format 'yyyyMMdd-HHmmss' }
     if ($Name -notmatch '\.png$') { $Name += '.png' }
     New-Item -ItemType Directory -Force -Path $WT_SHOTS | Out-Null
     $path = Join-Path $WT_SHOTS $Name
     $bmp = $null; $rect = $null; $how = 'screen'
     if (-not $Screen) {
-        $h = Get-UiWindow -TimeoutSec 2
+        $h = if ($Flyout) { Get-FlyoutWindow } else { Get-UiWindow -TimeoutSec 2 }
+        if ($Flyout -and $h -eq [IntPtr]::Zero) { throw 'no flyout window (open it with Invoke-TrayIcon / wt tray)' }
         if ($h -ne [IntPtr]::Zero) {
-            if (-not $NoRaise) {
+            if (-not $NoRaise -and -not $Flyout) {
                 if (-not (Show-Ui $h)) { Write-Output "WARNING: could not bring Spora to the foreground; foreground is '$(Get-WindowTitle ([Wt.Native]::GetForegroundWindow()))'" }
                 Start-Sleep -Milliseconds 300
             }
@@ -375,3 +376,84 @@ function Send-Paste([string]$Text) {
 }
 
 function Get-ClipboardText { Get-Clipboard -Raw }
+
+# ── Tray icon + flyout ────────────────────────────────────────────────
+# The client keeps a notification-area icon ("Spora" + its tooltip, e.g.
+# 'Spora Spora — OFFLINE'). Windows parks new icons in the hidden-icons
+# overflow, so this looks in the taskbar first and then opens the overflow
+# ("Show Hidden Icons") and looks there. Returns the UIA element or $null.
+function Find-TrayIcon {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $all = [System.Windows.Automation.TreeScope]::Descendants
+    $any = [System.Windows.Automation.Condition]::TrueCondition
+    $cond = New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd')
+    $tray = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+    if (-not $tray) { return $null }
+    $chevron = $null
+    foreach ($e in $tray.FindAll($all, $any)) {
+        if ($e.Current.Name -like 'Spora Spora*') { return $e }
+        # "Show Hidden Icons" (closed) / "Show Hidden Icons`nHide" (open)
+        if ($e.Current.Name -like 'Show Hidden Icons*') { $chevron = $e }
+    }
+    # The overflow popup: its UIA tree fills in lazily after it opens, so
+    # poll for a few seconds instead of trusting the first read.
+    $inOverflow = {
+        foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $any)) {
+            if ($w.Current.ClassName -ne 'TopLevelWindowForOverflowXamlIsland') { continue }
+            foreach ($e in $w.FindAll($all, $any)) { if ($e.Current.Name -like 'Spora Spora*') { return $e } }
+        }
+        return $null
+    }
+    $opened = $false
+    for ($i = 0; $i -lt 8; $i++) {
+        $hit = & $inOverflow
+        if ($hit) { return $hit }
+        if (-not $opened -and $chevron -and $chevron.Current.Name -notlike '*Hide*') {
+            $chevron.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            $opened = $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $null
+}
+
+# Left-click the tray icon through UIA (toggles the flyout). Prints the
+# icon's name, which carries the tooltip = the aggregate status.
+function Invoke-TrayIcon {
+    $icon = Find-TrayIcon
+    if (-not $icon) { throw 'no Spora tray icon (is the UI running?)' }
+    $icon.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 1200
+    Write-Output "tray icon: '$($icon.Current.Name)'"
+}
+
+# The flyout window: the smallest visible titled window of the process
+# (the main window is 880x620+; the flyout is 280 wide).
+function Get-FlyoutWindow {
+    $best = $null; $bestArea = [int]::MaxValue
+    foreach ($w in Get-UiWindows) {
+        $r = Get-WindowRect $w.Hwnd
+        if ($r.Width -gt 400) { continue }
+        $a = $r.Width * $r.Height
+        if ($a -gt 2500 -and $a -lt $bestArea) { $best = $w.Hwnd; $bestArea = $a }
+    }
+    if ($best) { return [IntPtr]$best }
+    return [IntPtr]::Zero
+}
+
+# ── Toasts ────────────────────────────────────────────────────────────
+# Delivered toasts for the client's AppUserModelId, from the notification
+# platform's own history (what the Action Center holds), newest first.
+# Visual capture of a toast popup is unreliable on this box; this is not.
+function Get-SporaToasts {
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    $aumid = 'Spora.Client'
+    $n = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid)
+    Write-Output "notifier setting: $($n.Setting)"
+    $h = [Windows.UI.Notifications.ToastNotificationManager]::History.GetHistory($aumid)
+    Write-Output "delivered toasts in history: $(@($h).Count)"
+    foreach ($t in $h) {
+        $texts = @($t.Content.GetElementsByTagName('text') | ForEach-Object { $_.InnerText })
+        Write-Output ("  {0}  {1}" -f ($t.ExpirationTime.AddDays(-3).ToString('HH:mm:ss')), ($texts -join ' | '))
+    }
+}

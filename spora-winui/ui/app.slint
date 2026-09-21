@@ -1,975 +1,136 @@
-// ── Color palette (matches Android app) ──────────────────────────────
-global Palette {
-    out property <color> sage:             #D2D6CC;
-    out property <color> sage-dark:        #C0C4BA;
-    out property <color> slate:            #4D5954;
-    out property <color> slate-dark:       #3A4440;
-    out property <color> orange:           #E36C50;
-    out property <color> text-main:        #181A18;
-    out property <color> text-muted:       #626660;
-    out property <color> text-light:       #F0F2EE;
-    out property <color> text-light-muted: #A3A8A4;
-    out property <color> card-bg:          #FFFFFF.with-alpha(40%);
-    out property <color> green:            #4CAF50;
-    out property <color> yellow:           #FFC107;
-}
+// Spora Windows client — main window (design canvas 1b, "master-detail
+// instrument"): the sidebar is the connection list, the detail pane is the
+// status surface. Dialogs float over a smoke layer; the tray flyout is a
+// separate window exported from here.
 
-// ── Connection item model ────────────────────────────────────────────
-struct ConnectionItem {
-    id: string,
-    label: string,
-    detail: string,       // URL for use-connections, empty for share
-    status: string,       // "inactive" | "starting" | "sharing" | "connecting" | "connected"
-    active: bool,
-}
+import { Theme, ConnectionItem, StatusLine } from "theme.slint";
+import { Sidebar } from "sidebar.slint";
+import { DetailPane, EmptyPane, NewSharePane, CreatingPane, ErrorBanner } from "detail.slint";
+import { ConnectDialog, DeleteDialog } from "dialogs.slint";
+import { TrayFlyout } from "flyout.slint";
 
-// ── Main window ──────────────────────────────────────────────────────
+export { TrayFlyout, ConnectionItem, StatusLine }
+
 export component AppWindow inherits Window {
     title: "Spora";
-    default-font-family: "Segoe UI";
-    default-font-size: 14px;
-    width: 400px;
-    height: 680px;
-    background: Palette.sage;
+    icon: @image-url("assets/logo-icon.svg");
+    default-font-family: "IBM Plex Sans";
+    default-font-size: 13.5px;
+    preferred-width: 880px;
+    preferred-height: 620px;
+    min-width: 760px;
+    min-height: 540px;
+    background: Theme.surface-bg;
 
-    // ── State ────────────────────────────────────────────────────────
-    in-out property <int> current-tab: 0;    // 0 = Share, 1 = Use
-    in-out property <string> status-text: "Connecting to service...";
-    in-out property <bool> core-connected: false;
+    // ── Model (owned by Rust) ────────────────────────────────────────
+    in property <[ConnectionItem]> shares;
+    in property <[ConnectionItem]> uses;
+    in property <[StatusLine]> status-lines;
+    in property <string> selected-id;
+    in property <string> selected-role;
+    in property <ConnectionItem> selected;
+    in property <[float]> selected-bars;
+    in property <string> selected-elapsed;
+    in property <string> pane: "empty";   // "empty" | "detail" | "new-share" | "creating"
+    in property <string> banner;
 
-    in-out property <[ConnectionItem]> share-connections: [];
-    in-out property <[ConnectionItem]> use-connections: [];
-
-    // Modal state
-    in-out property <bool> show-add-modal: false;
-    in-out property <bool> show-rename-modal: false;
-    in-out property <bool> show-delete-modal: false;
-    in-out property <string> modal-id: "";
-    in-out property <string> modal-label: "";
-    in-out property <string> modal-url: "";
-    in-out property <bool> modal-is-share: false;    // context for rename/delete
+    // ── UI-local state ───────────────────────────────────────────────
+    in-out property <string> new-share-name;
+    in-out property <bool> renaming;
+    in-out property <string> rename-text;
+    in-out property <bool> show-connect-dialog;
+    in-out property <bool> dialog-focus-name;
+    in-out property <string> dialog-url;
+    in-out property <string> dialog-name;
+    in-out property <string> dialog-url-error;
+    in-out property <bool> show-delete-dialog;
+    in-out property <string> delete-id;
+    in-out property <string> delete-role;
+    in-out property <string> delete-label;
 
     // ── Callbacks ────────────────────────────────────────────────────
+    callback select(role: string, id: string);
     callback share-new();
-    callback use-new();
-    callback toggle-share(string);         // id
-    callback toggle-use(string);           // id
-    callback delete-connection(string, bool);  // id, is-share
-    callback rename-connection(string, bool, string); // id, is-share, new-label
-    callback save-share(string);           // label (new share)
-    callback save-use(string, string);     // label, url (new use)
-    callback copy-to-clipboard(string);    // text to copy
+    callback connect-new();
+    callback toggle(id: string, role: string, on: bool);
+    callback retry(role: string, id: string);
+    callback delete(role: string, id: string);
+    callback rename(role: string, id: string, label: string);
+    callback copy(text: string);
+    callback cancel-new-share();
+    callback finish-new-share(id: string, label: string);
+    callback dialog-save(url: string, name: string);
+    callback dismiss-banner();
 
-    VerticalLayout {
-        // ── Header ───────────────────────────────────────────────────
-        Rectangle {
-            height: 56px;
-            background: Palette.sage;
-
-            HorizontalLayout {
-                padding-left: 20px;
-                padding-right: 20px;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: 8px;
-
-                    Rectangle {
-                        width: 24px;
-
-                        Image {
-                            source: @image-url("../../assets/logo.svg");
-                            width: parent.width;
-                            height: 30px;
-                            x: 0;
-                            y: (parent.height - self.height) / 2;
-                            image-fit: contain;
-                        }
-                    }
-
-                    Text {
-                        text: "SPORA";
-                        font-size: 20px;
-                        font-weight: 700;
-                        color: Palette.text-main;
-                        vertical-alignment: center;
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
-
-                    Rectangle {
-                        width: 10px;
-                        height: 10px;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 5px;
-                        background: root.core-connected ? Palette.green : Palette.orange;
-                    }
-
-                    Text {
-                        text: root.status-text;
-                        font-size: 13px;
-                        color: Palette.text-muted;
-                        vertical-alignment: center;
-                    }
-                }
-            }
+    HorizontalLayout {
+        Sidebar {
+            shares: root.shares;
+            uses: root.uses;
+            status-lines: root.status-lines;
+            selected-id: root.selected-id;
+            selected-role: root.selected-role;
+            select(role, id) => { root.renaming = false; root.select(role, id); }
+            share-new => { root.share-new(); }
+            connect-new => { root.connect-new(); }
         }
-
-        // ── Tab content ──────────────────────────────────────────────
         Rectangle {
-            vertical-stretch: 1;
-            background: Palette.sage;
-
-            // Share page
-            if root.current-tab == 0 : VerticalLayout {
-                padding: 16px;
-                spacing: 16px;
-
-                // Action card
-                Rectangle {
-                    height: 90px;
-                    border-radius: 16px;
-                    background: Palette.orange;
-
-                    HorizontalLayout {
-                        padding-left: 20px;
-                        padding-right: 16px;
-                        alignment: space-between;
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 4px;
-
-                            Text {
-                                text: "Share Your Internet";
-                                font-size: 18px;
-                                font-weight: 600;
-                                color: Palette.text-light;
-                            }
-                            Text {
-                                text: "Create a link to share your connection";
-                                font-size: 12px;
-                                color: Palette.text-light-muted;
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44px;
-                            height: 44px;
-                            y: (parent.height - self.height) / 2;
-                            border-radius: 22px;
-                            background: Palette.text-light.with-alpha(20%);
-
-                            Text {
-                                text: "+";
-                                font-size: 24px;
-                                color: Palette.text-light;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            TouchArea {
-                                clicked => {
-                                    root.modal-is-share = true;
-                                    root.show-add-modal = true;
-                                    root.modal-label = "";
-                                }
-                            }
-                        }
-                    }
+            horizontal-stretch: 1;
+            VerticalLayout {
+                alignment: stretch;
+                if root.banner != "" : VerticalLayout {
+                    padding-left: 30px;
+                    padding-right: 30px;
+                    padding-top: 20px;
+                    ErrorBanner { text: root.banner; dismiss => { root.dismiss-banner(); } }
                 }
-
-                // Saved connections header
-                Text {
-                    text: "SAVED CONNECTIONS";
-                    font-size: 11px;
-                    font-weight: 600;
-                    color: Palette.text-muted;
-                    letter-spacing: 1px;
+                if root.pane == "empty" : EmptyPane {
+                    share-new => { root.share-new(); }
+                    connect-new => { root.connect-new(); }
                 }
-
-                // Connection list
-                Flickable {
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        alignment: start;
-                        spacing: 8px;
-
-                        for conn in root.share-connections : Rectangle {
-                            height: conn.detail != "" ? 80px : 64px;
-                            border-radius: 12px;
-                            background: Palette.card-bg;
-
-                            HorizontalLayout {
-                                padding-left: 16px;
-                                padding-right: 12px;
-                                spacing: 12px;
-
-                                // Label + URL + status (right-click to rename)
-                                Rectangle {
-                                    horizontal-stretch: 1;
-
-                                    TouchArea {
-                                        pointer-event(ev) => {
-                                            if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
-                                                root.modal-id = conn.id;
-                                                root.modal-label = conn.label;
-                                                root.modal-is-share = true;
-                                                root.show-rename-modal = true;
-                                            }
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 3px;
-
-                                        Text {
-                                            text: conn.label;
-                                            font-size: 15px;
-                                            font-weight: 500;
-                                            color: Palette.text-main;
-                                            overflow: elide;
-                                        }
-
-                                        if conn.detail != "" : Text {
-                                            text: conn.detail;
-                                            font-size: 11px;
-                                            color: Palette.text-muted;
-                                            overflow: elide;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: 6px;
-
-                                            Rectangle {
-                                                width: 8px;
-                                                height: 8px;
-                                                y: (parent.height - self.height) / 2;
-                                                border-radius: 4px;
-                                                background: conn.status == "sharing" ? Palette.green
-                                                          : conn.status == "starting" ? Palette.yellow
-                                                          : Palette.text-muted;
-                                            }
-
-                                            Text {
-                                                text: conn.status == "sharing" ? "Sharing"
-                                                    : conn.status == "starting" ? "Starting..."
-                                                    : "Inactive";
-                                                font-size: 12px;
-                                                color: conn.status == "sharing" ? Palette.green
-                                                     : conn.status == "starting" ? Palette.yellow
-                                                     : Palette.text-muted;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Copy button (visible when URL available)
-                                if conn.detail != "" : Rectangle {
-                                    width: 44px;
-                                    height: 26px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 6px;
-                                    background: copy-touch.has-hover ? Palette.sage-dark : Palette.sage;
-
-                                    Text {
-                                        text: "Copy";
-                                        font-size: 11px;
-                                        font-weight: 600;
-                                        color: Palette.text-muted;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-
-                                    copy-touch := TouchArea {
-                                        clicked => {
-                                            root.copy-to-clipboard(conn.detail);
-                                        }
-                                    }
-                                }
-
-                                // Delete button
-                                Rectangle {
-                                    width: 32px;
-                                    height: 32px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 6px;
-                                    background: share-del-touch.has-hover ? Palette.orange.with-alpha(20%) : transparent;
-
-                                    Path {
-                                        width: 14px;
-                                        height: 14px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        viewbox-width: 24;
-                                        viewbox-height: 24;
-                                        fill: share-del-touch.has-hover ? Palette.orange : Palette.text-muted;
-                                        commands: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12Z";
-                                    }
-
-                                    share-del-touch := TouchArea {
-                                        clicked => {
-                                            root.modal-id = conn.id;
-                                            root.modal-label = conn.label;
-                                            root.modal-is-share = true;
-                                            root.show-delete-modal = true;
-                                        }
-                                    }
-                                }
-
-                                // Toggle
-                                Rectangle {
-                                    width: 48px;
-                                    height: 28px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 14px;
-                                    background: conn.active ? Palette.green : Palette.sage-dark;
-
-                                    animate background { duration: 150ms; }
-
-                                    Rectangle {
-                                        x: conn.active ? parent.width - self.width - 3px : 3px;
-                                        y: (parent.height - self.height) / 2;
-                                        width: 22px;
-                                        height: 22px;
-                                        border-radius: 11px;
-                                        background: white;
-
-                                        animate x { duration: 150ms; easing: ease-in-out; }
-                                    }
-
-                                    TouchArea {
-                                        clicked => {
-                                            root.toggle-share(conn.id);
-                                        }
-                                    }
-                                }
-                            }
-
-                        }
+                if root.pane == "detail" : DetailPane {
+                    item: root.selected;
+                    bars: root.selected-bars;
+                    elapsed: root.selected-elapsed;
+                    renaming <=> root.renaming;
+                    rename-text <=> root.rename-text;
+                    toggle(id, role, on) => { root.toggle(id, role, on); }
+                    copy(text) => { root.copy(text); }
+                    retry(role, id) => { root.retry(role, id); }
+                    delete(role, id) => {
+                        root.delete-id = id;
+                        root.delete-role = role;
+                        root.delete-label = root.selected.label;
+                        root.show-delete-dialog = true;
                     }
+                    rename(role, id, label) => { root.rename(role, id, label); }
                 }
-            }
-
-            // Use page
-            if root.current-tab == 1 : VerticalLayout {
-                padding: 16px;
-                spacing: 16px;
-
-                // Action card
-                Rectangle {
-                    height: 90px;
-                    border-radius: 16px;
-                    background: Palette.orange;
-
-                    HorizontalLayout {
-                        padding-left: 20px;
-                        padding-right: 16px;
-                        alignment: space-between;
-
-                        VerticalLayout {
-                            alignment: center;
-                            spacing: 4px;
-
-                            Text {
-                                text: "Connect via Friend";
-                                font-size: 18px;
-                                font-weight: 600;
-                                color: Palette.text-light;
-                            }
-                            Text {
-                                text: "Use a connection a friend has shared with you";
-                                font-size: 12px;
-                                color: Palette.text-light-muted;
-                            }
-                        }
-
-                        Rectangle {
-                            width: 44px;
-                            height: 44px;
-                            y: (parent.height - self.height) / 2;
-                            border-radius: 22px;
-                            background: Palette.text-light.with-alpha(20%);
-
-                            Text {
-                                text: "+";
-                                font-size: 24px;
-                                color: Palette.text-light;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-
-                            TouchArea {
-                                clicked => {
-                                    root.modal-is-share = false;
-                                    root.show-add-modal = true;
-                                    root.modal-label = "";
-                                    root.modal-url = "";
-                                }
-                            }
-                        }
-                    }
+                if root.pane == "new-share" : NewSharePane {
+                    item: root.selected;
+                    elapsed: root.selected-elapsed;
+                    name <=> root.new-share-name;
+                    copy(text) => { root.copy(text); }
+                    done(id, label) => { root.finish-new-share(id, label); }
                 }
-
-                // Saved connections header
-                Text {
-                    text: "SAVED CONNECTIONS";
-                    font-size: 11px;
-                    font-weight: 600;
-                    color: Palette.text-muted;
-                    letter-spacing: 1px;
-                }
-
-                // Connection list
-                Flickable {
-                    vertical-stretch: 1;
-
-                    VerticalLayout {
-                        alignment: start;
-                        spacing: 8px;
-
-                        for conn in root.use-connections : Rectangle {
-                            height: 72px;
-                            border-radius: 12px;
-                            background: Palette.card-bg;
-
-                            HorizontalLayout {
-                                padding-left: 16px;
-                                padding-right: 12px;
-                                spacing: 12px;
-
-                                // Label + URL + status (right-click to rename)
-                                Rectangle {
-                                    horizontal-stretch: 1;
-
-                                    TouchArea {
-                                        pointer-event(ev) => {
-                                            if ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right {
-                                                root.modal-id = conn.id;
-                                                root.modal-label = conn.label;
-                                                root.modal-is-share = false;
-                                                root.show-rename-modal = true;
-                                            }
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 3px;
-
-                                        Text {
-                                            text: conn.label;
-                                            font-size: 15px;
-                                            font-weight: 500;
-                                            color: Palette.text-main;
-                                            overflow: elide;
-                                        }
-
-                                        Text {
-                                            text: conn.detail;
-                                            font-size: 11px;
-                                            color: Palette.text-muted;
-                                            overflow: elide;
-                                        }
-
-                                        HorizontalLayout {
-                                            spacing: 6px;
-
-                                            Rectangle {
-                                                width: 8px;
-                                                height: 8px;
-                                                y: (parent.height - self.height) / 2;
-                                                border-radius: 4px;
-                                                background: conn.status == "connected" ? Palette.green
-                                                          : conn.status == "connecting" ? Palette.yellow
-                                                          : Palette.text-muted;
-                                            }
-
-                                            Text {
-                                                text: conn.status == "connected" ? "Connected"
-                                                    : conn.status == "connecting" ? "Connecting..."
-                                                    : "Inactive";
-                                                font-size: 12px;
-                                                color: conn.status == "connected" ? Palette.green
-                                                     : conn.status == "connecting" ? Palette.yellow
-                                                     : Palette.text-muted;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Delete button
-                                Rectangle {
-                                    width: 32px;
-                                    height: 32px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 6px;
-                                    background: use-del-touch.has-hover ? Palette.orange.with-alpha(20%) : transparent;
-
-                                    Path {
-                                        width: 14px;
-                                        height: 14px;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        viewbox-width: 24;
-                                        viewbox-height: 24;
-                                        fill: use-del-touch.has-hover ? Palette.orange : Palette.text-muted;
-                                        commands: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12Z";
-                                    }
-
-                                    use-del-touch := TouchArea {
-                                        clicked => {
-                                            root.modal-id = conn.id;
-                                            root.modal-label = conn.label;
-                                            root.modal-is-share = false;
-                                            root.show-delete-modal = true;
-                                        }
-                                    }
-                                }
-
-                                // Toggle
-                                Rectangle {
-                                    width: 48px;
-                                    height: 28px;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: 14px;
-                                    background: conn.active ? Palette.green : Palette.sage-dark;
-
-                                    animate background { duration: 150ms; }
-
-                                    Rectangle {
-                                        x: conn.active ? parent.width - self.width - 3px : 3px;
-                                        y: (parent.height - self.height) / 2;
-                                        width: 22px;
-                                        height: 22px;
-                                        border-radius: 11px;
-                                        background: white;
-
-                                        animate x { duration: 150ms; easing: ease-in-out; }
-                                    }
-
-                                    TouchArea {
-                                        clicked => {
-                                            root.toggle-use(conn.id);
-                                        }
-                                    }
-                                }
-                            }
-
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Bottom navigation bar ────────────────────────────────────
-        Rectangle {
-            height: 60px;
-            background: Palette.slate;
-
-            HorizontalLayout {
-                alignment: space-around;
-
-                // Share tab
-                Rectangle {
-                    horizontal-stretch: 1;
-                    background: transparent;
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-
-                        Rectangle {
-                            height: 24px;
-
-                            Path {
-                                width: 22px;
-                                height: 22px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                viewbox-width: 24;
-                                viewbox-height: 24;
-                                fill: root.current-tab == 0 ? Palette.text-light : Palette.text-light-muted;
-                                commands: "M18,16.08c-0.76,0,-1.44,0.3,-1.96,0.77L8.91,12.7c0.05,-0.23,0.09,-0.46,0.09,-0.7s-0.04,-0.47,-0.09,-0.7l7.05,-4.11c0.54,0.5,1.25,0.81,2.04,0.81c1.66,0,3,-1.34,3,-3s-1.34,-3,-3,-3s-3,1.34,-3,3c0,0.24,0.04,0.47,0.09,0.7L8.04,9.81C7.5,9.31,6.79,9,6,9c-1.66,0,-3,1.34,-3,3s1.34,3,3,3c0.79,0,1.5,-0.31,2.04,-0.81l7.12,4.16c-0.05,0.21,-0.08,0.43,-0.08,0.65c0,1.61,1.31,2.92,2.92,2.92c1.61,0,2.92,-1.31,2.92,-2.92s-1.31,-2.92,-2.92,-2.92Z";
-                            }
-                        }
-                        Text {
-                            text: "Share";
-                            font-size: 12px;
-                            font-weight: root.current-tab == 0 ? 600 : 400;
-                            color: root.current-tab == 0 ? Palette.text-light : Palette.text-light-muted;
-                            horizontal-alignment: center;
-                        }
-                    }
-
-                    TouchArea {
-                        clicked => { root.current-tab = 0; }
-                    }
-                }
-
-                // Use tab
-                Rectangle {
-                    horizontal-stretch: 1;
-                    background: transparent;
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: 2px;
-
-                        Rectangle {
-                            height: 24px;
-
-                            Path {
-                                width: 22px;
-                                height: 22px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                viewbox-width: 24;
-                                viewbox-height: 24;
-                                fill: root.current-tab == 1 ? Palette.text-light : Palette.text-light-muted;
-                                commands: "M19.35,10.04C18.67,6.59,15.64,4,12,4C9.11,4,6.6,5.64,5.35,8.04C2.34,8.36,0,10.91,0,14c0,3.31,2.69,6,6,6h13c2.76,0,5,-2.24,5,-5c0,-2.64,-2.05,-4.78,-4.65,-4.96ZM17,13l-5,5l-5,-5h3L10,9h4v4h3Z";
-                            }
-                        }
-                        Text {
-                            text: "Use";
-                            font-size: 12px;
-                            font-weight: root.current-tab == 1 ? 600 : 400;
-                            color: root.current-tab == 1 ? Palette.text-light : Palette.text-light-muted;
-                            horizontal-alignment: center;
-                        }
-                    }
-
-                    TouchArea {
-                        clicked => { root.current-tab = 1; }
-                    }
+                if root.pane == "creating" : CreatingPane {
+                    cancel => { root.cancel-new-share(); }
                 }
             }
         }
     }
 
-    // ═════════════════════════════════════════════════════════════════
-    // ── Modals (overlay the entire window) ───────────────────────────
-    // ═════════════════════════════════════════════════════════════════
-
-    // ── Add connection modal ─────────────────────────────────────────
-    if show-add-modal : Rectangle {
-        background: Palette.sage.with-alpha(95%);
-
-        TouchArea { /* block clicks through */ }
-
-        VerticalLayout {
-            alignment: center;
-            padding: 32px;
-            spacing: 20px;
-
-            Text {
-                text: root.modal-is-share ? "New Share Connection" : "New Use Connection";
-                font-size: 20px;
-                font-weight: 600;
-                color: Palette.text-main;
-                horizontal-alignment: center;
-            }
-
-            // URL field (use-connections only)
-            if !root.modal-is-share : VerticalLayout {
-                spacing: 6px;
-
-                Text {
-                    text: "URL";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Palette.text-muted;
-                }
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: white;
-                    border-color: Palette.sage-dark;
-                    border-width: 1px;
-
-                    HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
-
-                        url-input := TextInput {
-                            text <=> root.modal-url;
-                            font-size: 14px;
-                            color: Palette.text-main;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // Placeholder
-                    if root.modal-url == "" : Text {
-                        x: 14px;
-                        text: "https://spora.to/s/...";
-                        font-size: 14px;
-                        color: Palette.text-muted;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            // Label field
-            VerticalLayout {
-                spacing: 6px;
-
-                Text {
-                    text: "Name";
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: Palette.text-muted;
-                }
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: white;
-                    border-color: Palette.sage-dark;
-                    border-width: 1px;
-
-                    HorizontalLayout {
-                        padding-left: 14px;
-                        padding-right: 14px;
-
-                        label-input := TextInput {
-                            text <=> root.modal-label;
-                            font-size: 14px;
-                            color: Palette.text-main;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // Placeholder
-                    if root.modal-label == "" : Text {
-                        x: 14px;
-                        text: "My connection";
-                        font-size: 14px;
-                        color: Palette.text-muted;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            // Buttons
-            VerticalLayout {
-                spacing: 10px;
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: save-touch.has-hover ? Palette.slate-dark : Palette.slate;
-
-                    Text {
-                        text: "SAVE CONNECTION";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: Palette.text-light;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    save-touch := TouchArea {
-                        clicked => {
-                            if root.modal-is-share {
-                                root.save-share(root.modal-label);
-                            } else {
-                                root.save-use(root.modal-label, root.modal-url);
-                            }
-                            root.show-add-modal = false;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: transparent;
-
-                    Text {
-                        text: "Cancel";
-                        font-size: 14px;
-                        color: Palette.text-muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    TouchArea {
-                        clicked => { root.show-add-modal = false; }
-                    }
-                }
-            }
-        }
+    if root.show-connect-dialog : ConnectDialog {
+        focus-name: root.dialog-focus-name;
+        url <=> root.dialog-url;
+        name <=> root.dialog-name;
+        url-error: root.dialog-url-error;
+        save(url, name) => { root.dialog-save(url, name); }
+        cancel => { root.show-connect-dialog = false; root.dialog-url-error = ""; }
     }
 
-    // ── Rename modal ─────────────────────────────────────────────────
-    if show-rename-modal : Rectangle {
-        background: Palette.sage.with-alpha(95%);
-
-        TouchArea { }
-
-        VerticalLayout {
-            alignment: center;
-            padding: 32px;
-            spacing: 20px;
-
-            Text {
-                text: "Rename Connection";
-                font-size: 20px;
-                font-weight: 600;
-                color: Palette.text-main;
-                horizontal-alignment: center;
-            }
-
-            Rectangle {
-                height: 48px;
-                border-radius: 10px;
-                background: white;
-                border-color: Palette.sage-dark;
-                border-width: 1px;
-
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
-
-                    rename-input := TextInput {
-                        text <=> root.modal-label;
-                        font-size: 14px;
-                        color: Palette.text-main;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            VerticalLayout {
-                spacing: 10px;
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: rename-save-touch.has-hover ? Palette.slate-dark : Palette.slate;
-
-                    Text {
-                        text: "SAVE";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: Palette.text-light;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    rename-save-touch := TouchArea {
-                        clicked => {
-                            root.rename-connection(root.modal-id, root.modal-is-share, root.modal-label);
-                            root.show-rename-modal = false;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: transparent;
-
-                    Text {
-                        text: "Cancel";
-                        font-size: 14px;
-                        color: Palette.text-muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    TouchArea {
-                        clicked => { root.show-rename-modal = false; }
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Delete confirmation modal ────────────────────────────────────
-    if show-delete-modal : Rectangle {
-        background: Palette.sage.with-alpha(95%);
-
-        TouchArea { }
-
-        VerticalLayout {
-            alignment: center;
-            padding: 32px;
-            spacing: 20px;
-
-            Text {
-                text: "Delete Connection";
-                font-size: 20px;
-                font-weight: 600;
-                color: Palette.text-main;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Are you sure?";
-                font-size: 16px;
-                color: Palette.text-main;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "\"" + root.modal-label + "\" will be permanently removed.";
-                font-size: 13px;
-                color: Palette.text-muted;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            VerticalLayout {
-                spacing: 10px;
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: del-touch.has-hover ? #C0513A : Palette.orange;
-
-                    Text {
-                        text: "DELETE";
-                        font-size: 14px;
-                        font-weight: 600;
-                        color: Palette.text-light;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    del-touch := TouchArea {
-                        clicked => {
-                            root.delete-connection(root.modal-id, root.modal-is-share);
-                            root.show-delete-modal = false;
-                        }
-                    }
-                }
-
-                Rectangle {
-                    height: 48px;
-                    border-radius: 10px;
-                    background: transparent;
-
-                    Text {
-                        text: "Cancel";
-                        font-size: 14px;
-                        color: Palette.text-muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    TouchArea {
-                        clicked => { root.show-delete-modal = false; }
-                    }
-                }
-            }
-        }
+    if root.show-delete-dialog : DeleteDialog {
+        label: root.delete-label;
+        is-share: root.delete-role == "share";
+        confirm => { root.show-delete-dialog = false; root.delete(root.delete-role, root.delete-id); }
+        cancel => { root.show-delete-dialog = false; }
     }
 }
