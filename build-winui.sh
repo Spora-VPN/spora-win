@@ -47,21 +47,13 @@ fi
 
 # ── Generate icon ─────────────────────────────────────────────────────
 
-ICON="$(pwd)/$STAGING/spora.ico"
-
-if [ ! -f "$ICON" ]; then
-    echo ":: Converting logo.svg to spora.ico..."
-    convert -background none "assets/logo.svg" \
-        \( -clone 0 -resize 16x16 \) \
-        \( -clone 0 -resize 32x32 \) \
-        \( -clone 0 -resize 48x48 \) \
-        \( -clone 0 -resize 64x64 \) \
-        \( -clone 0 -resize 128x128 \) \
-        \( -clone 0 -resize 256x256 \) \
-        -delete 0 "$ICON"
-else
-    echo ":: spora.ico already staged, skipping conversion"
-fi
+# assets/spora.ico is the committed application icon: the spore mark on a
+# square canvas centered on its circle (assets/logo-square.svg), rendered
+# at 16-256px. Regenerate with: for n in 16 20 24 32 40 48 64 128 256; do
+#   rsvg-convert -w $n -h $n assets/logo-square.svg -o /tmp/ico-$n.png; done
+#   convert /tmp/ico-{16,20,24,32,40,48,64,128,256}.png assets/spora.ico
+ICON="$(pwd)/assets/spora.ico"
+[ -f "$ICON" ] || { echo ":: ERROR: $ICON missing" >&2; exit 1; }
 
 # ── Build installer ───────────────────────────────────────────────────
 

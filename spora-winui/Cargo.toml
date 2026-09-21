@@ -40,3 +40,6 @@ windows-sys = { version = "0.52", features = [
 [build-dependencies]
 slint-build = "1.15"
 tonic-build = "0.13"
+# Embeds assets/spora.ico into the Windows executable (Explorer, taskbar,
+# shortcuts); uses the mingw windres for the gnu target.
+winresource = "0.1"

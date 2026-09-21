@@ -15,9 +15,6 @@ component FlyoutRow inherits Rectangle {
     property <bool> on: active || pending;
     property <bool> error: item.status == "error";
     property <string> shape: active ? "active" : pending ? "pending" : error ? "error" : "";
-    property <string> status-text: is-share
-        ? (active ? "↑ SHARING" : "STARTING…")
-        : (active ? "↓ CONNECTED" : "CONNECTING…");
 
     height: text-col.preferred-height + 18px;
     background: ta.has-hover ? Theme.hover : transparent;
@@ -50,7 +47,6 @@ component FlyoutRow inherits Rectangle {
                     color: (on || error) ? Theme.text-primary : Theme.text-muted;
                     overflow: elide;
                 }
-                if on : StatusText { text: status-text; color: active ? Theme.success-text : Theme.pending-text; }
                 if error : Text { text: item.error; font-size: 11.5px; color: Theme.error; wrap: word-wrap; }
                 if error : HorizontalLayout {
                     alignment: start;
@@ -141,7 +137,7 @@ export component TrayFlyout inherits Window {
             HorizontalLayout {
                 spacing: 8px;
                 alignment: start;
-                Image { source: @image-url("assets/logo-mark-b.svg"); height: 16px; width: 14px; image-fit: contain; y: (parent.height - self.height) / 2; }
+                Image { source: @image-url("assets/logo-mark.svg"); height: 20px; width: 17px; image-fit: contain; y: (parent.height - self.height) / 2; }
                 Text { text: "SPORA"; font-size: 11px; font-weight: 700; letter-spacing: 2.2px; color: Theme.text-primary; vertical-alignment: center; }
             }
             VerticalLayout {

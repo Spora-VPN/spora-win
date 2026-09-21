@@ -113,16 +113,19 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         // Lockup: mark + typeset wordmark.
+        // Lockup: the 20px mark (drawn from a padded SVG so its edge pixels
+        // are never clipped) with the wordmark centred on its box, as in
+        // the design system's lockup guideline.
         HorizontalLayout {
             padding-left: 18px;
-            padding-top: 20px;
+            padding-top: 18px;
             spacing: 9px;
             alignment: start;
-            height: 40px;
+            height: 42px;
             Image {
-                source: @image-url("assets/logo-mark-b.svg");
-                height: 20px;
-                width: 17px;
+                source: @image-url("assets/logo-mark.svg");
+                height: 24px;
+                width: 20px;
                 image-fit: contain;
             }
             Text {
