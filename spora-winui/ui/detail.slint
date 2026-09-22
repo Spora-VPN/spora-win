@@ -5,7 +5,7 @@
 import { Theme, ConnectionItem } from "theme.slint";
 import { MicroLabel, StatusText, DataText, BodyText, BodySmText, StatusShape, Tone,
          SporaToggle, ActionButton, MicroButton, InputField, Barcode, ActionCard, Card, InfoRow,
-         CopyIcon, ShareAgainIcon } from "components.slint";
+         CopyIcon } from "components.slint";
 
 /// Shape + status text (+ elapsed time) row.
 component StatusRow inherits HorizontalLayout {
@@ -253,11 +253,6 @@ export component DetailPane inherits VerticalLayout {
         HorizontalLayout {
             spacing: 4px;
             alignment: start;
-            if is-share && item.url != "" : MicroButton {
-                text: "SHARE AGAIN";
-                clicked => { root.copy(item.url); }
-                Rectangle { width: 14px; ShareAgainIcon { size: 14px; weight: 1.5px; y: (parent.height - self.height) / 2; } }
-            }
             MicroButton { text: "RENAME"; clicked => { root.rename-text = item.label; root.renaming = true; } }
             MicroButton {
                 text: is-share ? "DELETE SHARE" : "DELETE CONNECTION";
