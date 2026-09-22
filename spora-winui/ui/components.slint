@@ -129,11 +129,15 @@ export component ExternalIcon inherits Icon { commands: "M14 4h6v6 M20 4L11 13 M
 // Explicit geometry rather than a layout, so the alignment does not depend
 // on what surrounds it. `mark` is the height of the artwork; the image box
 // is larger because the SVG carries air on every side (its tight bounding
-// box otherwise loses its edge pixels). The wordmark's capitals sit on the
-// centre of the mark's circle (60.7% down the artwork, per the design
-// system's icon-centering note), which reads as centred; the bounding-box
-// centre sits 2px higher because of the tail. IBM Plex Sans Bold metrics:
-// ascent 1.025em, cap height 0.698em.
+// box otherwise loses its edge pixels).
+//
+// The wordmark's capitals are centred on the mark's visual centre: the
+// centre of the circle the arc describes, fitted from the path at
+// (35.9, 50.3) in the artwork's 70.2×84.0 box, i.e. 59.9% down — the tail
+// puts the bounding-box centre about 2px higher at this size. Slint lays
+// text out with the font's typographic metrics (IBM Plex Sans Bold:
+// ascender 0.78em, cap height 0.698em), so with `vertical-alignment: top`
+// the capitals' centre sits 0.431em below the element's top.
 
 export component Lockup inherits Rectangle {
     in property <length> mark: 20px;
@@ -145,8 +149,7 @@ export component Lockup inherits Rectangle {
     // the SVG's artwork occupies 84.04 of 96.04 units, aspect 70.2/84.04
     property <length> box: mark * 96.04 / 84.04;
     property <length> art-top: (box - mark) / 2;
-    property <length> circle-y: art-top + mark * 0.607;
-    property <length> caps-top: circle-y - wordmark-size * 0.698 / 2;
+    property <length> circle-y: art-top + mark * 0.599;
 
     height: box;
     width: box * 82.2 / 96.04 + gap + label.preferred-width;
@@ -162,7 +165,7 @@ export component Lockup inherits Rectangle {
     }
     label := Text {
         x: box * 82.2 / 96.04 + gap;
-        y: caps-top - wordmark-size * (1.025 - 0.698);
+        y: circle-y - wordmark-size * 0.431;
         height: wordmark-size * 1.3;
         text: "SPORA";
         font-size: wordmark-size;
