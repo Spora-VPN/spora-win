@@ -1,12 +1,14 @@
 // Spora Windows client — main window (design canvas 1b, "master-detail
 // instrument"): the sidebar is the connection list, the detail pane is the
-// status surface. Dialogs float over a smoke layer; the tray flyout is a
-// separate window exported from here.
+// status surface. The window is frameless: its caption strip and controls
+// are ours (chrome.slint). Dialogs float over a smoke layer; the tray
+// flyout is a separate window exported from here.
 
 import { Theme, ConnectionItem, StatusLine } from "theme.slint";
 import { Sidebar } from "sidebar.slint";
 import { DetailPane, EmptyPane, NewSharePane, CreatingPane, ErrorBanner } from "detail.slint";
 import { ConnectDialog, DeleteDialog } from "dialogs.slint";
+import { CaptionArea, WindowControls } from "chrome.slint";
 import { TrayFlyout } from "flyout.slint";
 
 export { TrayFlyout, ConnectionItem, StatusLine }
@@ -21,6 +23,10 @@ export component AppWindow inherits Window {
     min-width: 760px;
     min-height: 540px;
     background: Theme.surface-bg;
+    // No system frame; the backend resizes at the edges (cursor + OS drag),
+    // and there is nothing to resize while maximised.
+    no-frame: true;
+    resize-border-width: root.maximized ? 0px : 6px;
 
     // ── Model (owned by Rust) ────────────────────────────────────────
     in property <[ConnectionItem]> shares;
@@ -33,6 +39,7 @@ export component AppWindow inherits Window {
     in property <string> selected-elapsed;
     in property <string> pane: "empty";   // "empty" | "detail" | "new-share" | "creating"
     in property <string> banner;
+    in property <bool> maximized;
 
     // ── UI-local state ───────────────────────────────────────────────
     in-out property <string> new-share-name;
@@ -61,6 +68,28 @@ export component AppWindow inherits Window {
     callback finish-new-share(id: string, label: string);
     callback dialog-save(url: string, name: string);
     callback dismiss-banner();
+    // Window chrome
+    callback start-drag();
+    callback show-window-menu(x: length, y: length);
+    callback minimize();
+    callback toggle-maximize();
+    callback close-window();
+
+    // The caption sits behind the content: whatever is interactive above it
+    // (the controls, a banner's button) wins, everything else drags. The
+    // sidebar's lockup, just below the strip, drags too.
+    CaptionArea {
+        x: 0; y: 0; width: root.width; height: 32px;
+        start-drag => { root.start-drag(); }
+        toggle-maximize => { root.toggle-maximize(); }
+        show-menu(x, y) => { root.show-window-menu(x, y); }
+    }
+    CaptionArea {
+        x: 0; y: 32px; width: 248px; height: 22px;
+        start-drag => { root.start-drag(); }
+        toggle-maximize => { root.toggle-maximize(); }
+        show-menu(x, y) => { root.show-window-menu(x, y + self.y); }
+    }
 
     HorizontalLayout {
         Sidebar {
@@ -80,7 +109,7 @@ export component AppWindow inherits Window {
                 if root.banner != "" : VerticalLayout {
                     padding-left: 30px;
                     padding-right: 30px;
-                    padding-top: 20px;
+                    padding-top: 40px;   // clear of the caption strip and its controls
                     ErrorBanner { text: root.banner; dismiss => { root.dismiss-banner(); } }
                 }
                 if root.pane == "empty" : EmptyPane {
@@ -116,6 +145,15 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+
+    WindowControls {
+        x: root.width - self.width;
+        y: 0;
+        maximized: root.maximized;
+        minimize => { root.minimize(); }
+        toggle-maximize => { root.toggle-maximize(); }
+        close => { root.close-window(); }
     }
 
     if root.show-connect-dialog : ConnectDialog {

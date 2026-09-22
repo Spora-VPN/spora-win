@@ -14,6 +14,7 @@ wt run [spora-url]        # launch the UI on the desktop, parked top-left
 wt shot [name]            # -> target/wintest/shots/<name>.png
 wt tree                   # AccessKit tree with window-relative bounds
 wt click 'Share your internet' | wt click 244 237 | wt type text | wt keys '{ENTER}' | wt paste text
+wt drag 400 16 500 116    # press, move, release (window-relative): caption drag, edge resize
 wt tray                   # click the tray icon (UI Automation) -> opens/closes the flyout
 wt shot name --flyout     # PNG of the flyout window
 wt toasts                 # toasts the client delivered (Action Center history)

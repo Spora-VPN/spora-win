@@ -32,7 +32,12 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   sidebar is the connection list (shape-coded status: ● active, ○ pending,
   ◆ error), the detail pane is the status surface, creating a share is an
   in-place handoff (busy pane → link ready + copy + naming), connecting goes
-  through a centered dialog. Design tokens live in `ui/theme.slint`; IBM Plex
+  through a centered dialog. The window is frameless (`no-frame`): the
+  caption strip and the three window controls are ours (`ui/chrome.slint`;
+  drag/menu/maximise go through the winit accessor in main.rs), edge
+  resizing is Slint's own `resize-border-width`, and the DWM shadow plus
+  Windows 11 corner rounding are applied to the winit window after show.
+  Design tokens live in `ui/theme.slint`; IBM Plex
   Sans/Mono are bundled from `ui/fonts/` (nothing may be fetched at runtime).
   The client keeps running in the notification area when its window is
   closed: `src/tray.rs` renders the tray icon (mono mark + state shape,

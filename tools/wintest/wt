@@ -97,6 +97,7 @@ Windows box (WT_HOST, default user@windows-box):
   click X Y | click NAME [--right] [--double] [--screen] [--type Button]
                            click window-relative coords, or the centre of the UIA element NAME; refuses if
                            another window is under the point (--screen = absolute coords, no such check)
+  drag X1 Y1 X2 Y2 [--screen] press at X1,Y1, move to X2,Y2, release (window-relative; caption drag, edge resize)
   type TEXT | keys KEYS | paste TEXT
                            type literally / raw SendKeys syntax ({ENTER}, ^a ...) / clipboard + Ctrl+V
   ps [SCRIPT]              run arbitrary PowerShell in the desktop session (lib.ps1 loaded); stdin if no arg
@@ -209,6 +210,13 @@ case $cmd in
       t=""; [ -n "$type" ] && t=" -Type $type"
       desk "Invoke-ClickElement -Name $(psq "${pos[*]}")$t$flags"
     else die "usage: wt click X Y | wt click NAME"; fi
+    ;;
+
+  drag)
+    flags=""; pos=()
+    while [ $# -gt 0 ]; do case $1 in --screen) flags+=" -Screen" ;; *) pos+=("$1") ;; esac; shift; done
+    [ ${#pos[@]} -eq 4 ] || die "usage: wt drag X1 Y1 X2 Y2 [--screen]"
+    desk "Invoke-Drag -X1 ${pos[0]} -Y1 ${pos[1]} -X2 ${pos[2]} -Y2 ${pos[3]}$flags"
     ;;
 
   type)  desk "Send-Text $(psq "$*")" ;;

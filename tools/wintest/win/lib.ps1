@@ -343,6 +343,27 @@ function Invoke-Click {
     Write-Output "clicked screen $X,$Y"
 }
 
+# Press the left button at window-relative (X1,Y1), move to (X2,Y2) in
+# steps, release. For the frameless window's caption drag and edge resize.
+function Invoke-Drag {
+    param([int]$X1, [int]$Y1, [int]$X2, [int]$Y2, [switch]$Screen, [int]$Steps = 12)
+    $h = Get-UiWindow -TimeoutSec 2
+    if ($h -eq [IntPtr]::Zero) { throw 'no Spora window' }
+    Show-Ui $h | Out-Null
+    if (-not $Screen) { $r = Get-WindowRect $h; $X1 += $r.X; $Y1 += $r.Y; $X2 += $r.X; $Y2 += $r.Y }
+    $r0 = Get-WindowRect $h
+    [Wt.Native]::SetCursorPos($X1, $Y1) | Out-Null; Start-Sleep -Milliseconds 120
+    [Wt.Native]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 80
+    for ($i = 1; $i -le $Steps; $i++) {
+        $x = [int]($X1 + ($X2 - $X1) * $i / $Steps); $y = [int]($Y1 + ($Y2 - $Y1) * $i / $Steps)
+        [Wt.Native]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 40
+    }
+    Start-Sleep -Milliseconds 120
+    [Wt.Native]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 300
+    $r1 = Get-WindowRect $h
+    Write-Output "dragged screen $X1,$Y1 -> $X2,$Y2; window $($r0.X),$($r0.Y) $($r0.Width)x$($r0.Height) -> $($r1.X),$($r1.Y) $($r1.Width)x$($r1.Height)"
+}
+
 # Click the centre of the UIA element named -Name.
 function Invoke-ClickElement {
     param([string]$Name, [string]$Type, [switch]$Right, [switch]$Double)

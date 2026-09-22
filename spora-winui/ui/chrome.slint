@@ -1,0 +1,101 @@
+// Window chrome for the frameless main window (design canvas 1b). The
+// window draws no system frame: the top 32px is the caption (it moves the
+// window, double-click maximises, right-click shows the system menu) and
+// the three 46×32 controls sit at the top-right, drawn as 10px ink strokes
+// like the design. Resizing at the edges is the backend's own
+// `resize-border-width` handling, not ours.
+
+import { Theme } from "theme.slint";
+
+/// An invisible strip that moves the window. The OS move loop starts on
+/// the first real movement rather than on the press, so a click stays a
+/// click and a double-click can be seen as one.
+export component CaptionArea inherits TouchArea {
+    callback start-drag();
+    callback toggle-maximize();
+    callback show-menu(x: length, y: length);
+    property <bool> dragging;
+
+    moved => {
+        if root.pressed && !root.dragging
+            && (abs(root.mouse-x - root.pressed-x) > 3px || abs(root.mouse-y - root.pressed-y) > 3px) {
+            root.dragging = true;
+            root.start-drag();
+        }
+    }
+    pointer-event(e) => {
+        if e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel {
+            root.dragging = false;
+        }
+        if e.kind == PointerEventKind.up && e.button == PointerEventButton.right {
+            root.show-menu(root.mouse-x, root.mouse-y);
+        }
+    }
+    double-clicked => { root.toggle-maximize(); }
+}
+
+component ControlButton inherits Rectangle {
+    in property <string> name;
+    in property <string> commands;
+    in property <length> weight: 1px;
+    /// The close button: platform convention keeps it red on hover.
+    in property <bool> danger;
+    callback clicked();
+
+    width: 46px;
+    height: 32px;
+    background: ta.pressed ? (danger ? Theme.error-strong : Theme.pressed)
+        : ta.has-hover ? (danger ? Theme.error : Theme.hover)
+        : transparent;
+    accessible-role: button;
+    accessible-label: name;
+    accessible-action-default => { root.clicked(); }
+
+    Path {
+        x: 18px;
+        y: 11px;
+        width: 10px;
+        height: 10px;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: root.commands;
+        fill: transparent;
+        stroke: (danger && (ta.has-hover || ta.pressed)) ? Theme.surface-card : Theme.text-primary;
+        stroke-width: root.weight;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component WindowControls inherits HorizontalLayout {
+    in property <bool> maximized;
+    callback minimize();
+    callback toggle-maximize();
+    callback close();
+
+    width: 138px;
+    height: 32px;
+    spacing: 0;
+
+    ControlButton {
+        name: "Minimize";
+        commands: "M0 5h10";
+        clicked => { root.minimize(); }
+    }
+    ControlButton {
+        name: root.maximized ? "Restore" : "Maximize";
+        // A 9×9 rounded square; restored shows the second square behind it.
+        commands: root.maximized
+            ? "M2 2.5h4a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1 -1.5 1.5h-4a1.5 1.5 0 0 1 -1.5 -1.5v-4a1.5 1.5 0 0 1 1.5 -1.5z M2.5 2.5V2a1.5 1.5 0 0 1 1.5 -1.5h4a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1 -1.5 1.5h-0.5"
+            : "M2 0.5h6a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1 -1.5 1.5h-6a1.5 1.5 0 0 1 -1.5 -1.5v-6a1.5 1.5 0 0 1 1.5 -1.5z";
+        clicked => { root.toggle-maximize(); }
+    }
+    ControlButton {
+        name: "Close";
+        danger: true;
+        weight: 1.1px;
+        commands: "M0.5 0.5l9 9 M9.5 0.5l-9 9";
+        clicked => { root.close(); }
+    }
+}

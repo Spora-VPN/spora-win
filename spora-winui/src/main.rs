@@ -519,6 +519,66 @@ fn show_main(app: &AppWindow) {
         w.set_minimized(false);
         w.focus_window();
     });
+    // hide() drops the winit window and show() makes a new one, so the
+    // platform finish has to be applied again.
+    apply_window_chrome(app.as_weak(), 0);
+}
+
+/// Closing the window keeps the client (and its sessions) alive in the
+/// tray; without a tray there is nothing to come back from, so quit.
+fn hide_or_quit(app: &AppWindow, tray_ok: bool) {
+    if tray_ok && cfg!(windows) {
+        app.window().hide().ok();
+    } else {
+        slint::quit_event_loop().ok();
+    }
+}
+
+/// The frameless window's platform finish: the DWM drop shadow (and the 1px
+/// frame line it comes with) and Windows 11's rounded corners. The winit
+/// window only exists once the event loop runs, hence the retry.
+fn apply_window_chrome(weak: slint::Weak<AppWindow>, attempt: u32) {
+    let Some(app) = weak.upgrade() else { return };
+    #[allow(unused_variables)]
+    let applied = {
+        use slint::winit_030::WinitWindowAccessor;
+        app.window()
+            .with_winit_window(|w| {
+                #[cfg(windows)]
+                {
+                    use slint::winit_030::winit::platform::windows::{CornerPreference, WindowExtWindows};
+                    w.set_undecorated_shadow(true);
+                    w.set_corner_preference(CornerPreference::Round);
+                }
+                let _ = w;
+            })
+            .is_some()
+    };
+    if !applied && attempt < 40 {
+        slint::Timer::single_shot(Duration::from_millis(50), move || apply_window_chrome(weak, attempt + 1));
+    }
+}
+
+/// Mirror the OS maximised state into the UI (restore glyph, no resize
+/// borders). Read on the next loop turn: winit updates its flags from the
+/// same WM_SIZE that produced this event.
+fn track_maximized(app: &AppWindow) {
+    use slint::winit_030::{WinitWindowAccessor, winit};
+    let weak = app.as_weak();
+    app.window().on_winit_window_event(move |_, ev| {
+        if let winit::event::WindowEvent::Resized(_) = ev {
+            let weak = weak.clone();
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                if let Some(app) = weak.upgrade() {
+                    let maximized = app.window().with_winit_window(|w| w.is_maximized()).unwrap_or(false);
+                    if app.get_maximized() != maximized {
+                        app.set_maximized(maximized);
+                    }
+                }
+            });
+        }
+        slint::winit_030::EventResult::Propagate
+    });
 }
 
 /// Place the flyout next to its anchor: right-aligned to the tray icon
@@ -1260,21 +1320,17 @@ fn main() {
         });
     }
 
-    // Closing the window keeps the client (and its sessions) alive in the
-    // tray; without a tray there is nothing to come back from, so quit.
+    // Alt+F4 / the taskbar's close: same as our close button.
     {
         let weak = app.as_weak();
         app.window().on_close_requested(move || {
-            if tray_ok && cfg!(windows) {
-                if let Some(app) = weak.upgrade() {
-                    app.window().hide().ok();
-                }
-            } else {
-                slint::quit_event_loop().ok();
+            if let Some(app) = weak.upgrade() {
+                hide_or_quit(&app, tray_ok);
             }
             slint::CloseRequestResponse::HideWindow
         });
     }
+    track_maximized(&app);
 
     // ── Service connection ───────────────────────────────────────────
     if demo_mode.is_none() {
@@ -1448,6 +1504,47 @@ fn main() {
     }
     app.on_copy(move |text| copy_to_clipboard(&text));
 
+    // ── Window chrome (frameless: the caption and controls are ours) ──
+    {
+        use slint::winit_030::{WinitWindowAccessor, winit};
+        let weak = app.as_weak();
+        app.on_start_drag(move || {
+            if let Some(app) = weak.upgrade() {
+                app.window().with_winit_window(|w| {
+                    if let Err(e) = w.drag_window() {
+                        log::warn!("drag_window: {e}");
+                    }
+                });
+            }
+        });
+        let weak = app.as_weak();
+        app.on_show_window_menu(move |x, y| {
+            if let Some(app) = weak.upgrade() {
+                app.window().with_winit_window(|w| {
+                    w.show_window_menu(winit::dpi::LogicalPosition::new(x as f64, y as f64));
+                });
+            }
+        });
+        let weak = app.as_weak();
+        app.on_minimize(move || {
+            if let Some(app) = weak.upgrade() {
+                app.window().with_winit_window(|w| w.set_minimized(true));
+            }
+        });
+        let weak = app.as_weak();
+        app.on_toggle_maximize(move || {
+            if let Some(app) = weak.upgrade() {
+                app.window().with_winit_window(|w| w.set_maximized(!w.is_maximized()));
+            }
+        });
+        let weak = app.as_weak();
+        app.on_close_window(move || {
+            if let Some(app) = weak.upgrade() {
+                hide_or_quit(&app, tray_ok);
+            }
+        });
+    }
+
     // ── Flyout callbacks ─────────────────────────────────────────────
     {
         let ctx = ctx.clone();
@@ -1498,6 +1595,10 @@ fn main() {
 
     render(&ctx);
     app.show().unwrap();
+    {
+        let weak = app.as_weak();
+        slint::Timer::single_shot(Duration::ZERO, move || apply_window_chrome(weak, 0));
+    }
 
     // SPORA_UI_DEMO_FLYOUT=1 shows the tray flyout at the top-left for
     // screenshots ("only" hides the main window so window captures find it).
