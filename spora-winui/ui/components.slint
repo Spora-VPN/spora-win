@@ -125,6 +125,54 @@ export component ArrowIcon inherits Icon { commands: "M5 12h14 M12 5l7 7-7 7"; }
 export component ArrowNEIcon inherits Icon { commands: "M6 18L18 6 M8 6h10v10"; }
 export component ExternalIcon inherits Icon { commands: "M14 4h6v6 M20 4L11 13 M18 13v5.5A2.5 2.5 0 0 1 15.5 21H5.5A2.5 2.5 0 0 1 3 18.5V8.5A2.5 2.5 0 0 1 5.5 6H11"; }
 
+// ── Lockup: mark + typeset wordmark ──────────────────────────────────
+// Explicit geometry rather than a layout, so the alignment does not depend
+// on what surrounds it. `mark` is the height of the artwork; the image box
+// is larger because the SVG carries air on every side (its tight bounding
+// box otherwise loses its edge pixels). The wordmark's capitals sit on the
+// centre of the mark's circle (60.7% down the artwork, per the design
+// system's icon-centering note), which reads as centred; the bounding-box
+// centre sits 2px higher because of the tail. IBM Plex Sans Bold metrics:
+// ascent 1.025em, cap height 0.698em.
+
+export component Lockup inherits Rectangle {
+    in property <length> mark: 20px;
+    in property <length> wordmark-size: 13px;
+    in property <length> tracking: 2.4px;
+    in property <length> gap: 9px;
+    in property <color> ink: Theme.text-primary;
+
+    // the SVG's artwork occupies 84.04 of 96.04 units, aspect 70.2/84.04
+    property <length> box: mark * 96.04 / 84.04;
+    property <length> art-top: (box - mark) / 2;
+    property <length> circle-y: art-top + mark * 0.607;
+    property <length> caps-top: circle-y - wordmark-size * 0.698 / 2;
+
+    height: box;
+    width: box * 82.2 / 96.04 + gap + label.preferred-width;
+    background: transparent;
+
+    Image {
+        x: 0;
+        y: 0;
+        height: box;
+        width: box * 82.2 / 96.04;
+        source: @image-url("assets/logo-mark.svg");
+        image-fit: contain;
+    }
+    label := Text {
+        x: box * 82.2 / 96.04 + gap;
+        y: caps-top - wordmark-size * (1.025 - 0.698);
+        height: wordmark-size * 1.3;
+        text: "SPORA";
+        font-size: wordmark-size;
+        font-weight: 700;
+        letter-spacing: tracking;
+        color: ink;
+        vertical-alignment: top;
+    }
+}
+
 // ── The squared toggle — brand invariant §3.1 ────────────────────────
 
 export component SporaToggle inherits Rectangle {

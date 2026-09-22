@@ -387,28 +387,25 @@ function Find-TrayIcon {
     $all = [System.Windows.Automation.TreeScope]::Descendants
     $any = [System.Windows.Automation.Condition]::TrueCondition
     $cond = New-Object System.Windows.Automation.PropertyCondition ([System.Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd')
-    $tray = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
-    if (-not $tray) { return $null }
-    $chevron = $null
-    foreach ($e in $tray.FindAll($all, $any)) {
-        if ($e.Current.Name -like 'Spora Spora*') { return $e }
-        # "Show Hidden Icons" (closed) / "Show Hidden Icons`nHide" (open)
-        if ($e.Current.Name -like 'Show Hidden Icons*') { $chevron = $e }
-    }
-    # The overflow popup: its UIA tree fills in lazily after it opens, so
-    # poll for a few seconds instead of trusting the first read.
-    $inOverflow = {
+    # The taskbar's UIA tree is rebuilt whenever a window comes or goes (the
+    # flyout hiding, for one), and the overflow popup fills in lazily after
+    # it opens, so both are polled rather than read once.
+    $opened = $false
+    for ($i = 0; $i -lt 8; $i++) {
+        $tray = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $cond)
+        $chevron = $null
+        if ($tray) {
+            foreach ($e in $tray.FindAll($all, $any)) {
+                if ($e.Current.Name -like 'Spora Spora*') { return $e }
+                # "Show Hidden Icons" (closed) / "Show Hidden Icons`nHide" (open)
+                if ($e.Current.Name -like 'Show Hidden Icons*') { $chevron = $e }
+            }
+        }
         foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $any)) {
             if ($w.Current.ClassName -ne 'TopLevelWindowForOverflowXamlIsland') { continue }
             foreach ($e in $w.FindAll($all, $any)) { if ($e.Current.Name -like 'Spora Spora*') { return $e } }
         }
-        return $null
-    }
-    $opened = $false
-    for ($i = 0; $i -lt 8; $i++) {
-        $hit = & $inOverflow
-        if ($hit) { return $hit }
-        if (-not $opened -and $chevron -and $chevron.Current.Name -notlike '*Hide*') {
+        if ($i -ge 1 -and -not $opened -and $chevron -and $chevron.Current.Name -notlike '*Hide*') {
             $chevron.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
             $opened = $true
         }

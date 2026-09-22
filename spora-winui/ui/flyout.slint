@@ -2,7 +2,7 @@
 // one dense surface, the aggregate status in the header, entry actions below.
 
 import { Theme, ConnectionItem, StatusLine } from "theme.slint";
-import { MicroLabel, StatusText, StatusShape, Tone, SporaToggle, MicroButton, PlusIcon, ExternalIcon, BodySmText } from "components.slint";
+import { MicroLabel, StatusText, StatusShape, Tone, SporaToggle, MicroButton, PlusIcon, ExternalIcon, BodySmText, Lockup } from "components.slint";
 
 component FlyoutRow inherits Rectangle {
     in property <ConnectionItem> item;
@@ -112,6 +112,9 @@ export component TrayFlyout inherits Window {
     no-frame: true;
     always-on-top: true;
     width: 280px;
+    // The window follows its content: winit keeps the last size otherwise,
+    // and whichever layout stretches would swallow the difference.
+    height: content.preferred-height;
     background: Theme.surface-card;
     default-font-family: "IBM Plex Sans";
     default-font-size: 13px;
@@ -125,7 +128,7 @@ export component TrayFlyout inherits Window {
     callback share-new();
     callback connect-new();
 
-    VerticalLayout {
+    content := VerticalLayout {
         padding: 1px;
         HorizontalLayout {
             padding-left: 14px;
@@ -134,11 +137,10 @@ export component TrayFlyout inherits Window {
             padding-bottom: 12px;
             spacing: 10px;
             alignment: space-between;
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                Image { source: @image-url("assets/logo-mark.svg"); height: 20px; width: 17px; image-fit: contain; y: (parent.height - self.height) / 2; }
-                Text { text: "SPORA"; font-size: 11px; font-weight: 700; letter-spacing: 2.2px; color: Theme.text-primary; vertical-alignment: center; }
+            vertical-stretch: 0;
+            Rectangle {
+                width: lockup.width;
+                lockup := Lockup { mark: 18px; wordmark-size: 11px; tracking: 2.2px; gap: 8px; y: (parent.height - self.height) / 2; }
             }
             VerticalLayout {
                 spacing: 4px;

@@ -3,7 +3,7 @@
 // two entry actions at the foot.
 
 import { Theme, ConnectionItem, StatusLine } from "theme.slint";
-import { MicroLabel, StatusText, StatusShape, Tone, PlusIcon, BodySmText } from "components.slint";
+import { MicroLabel, StatusText, StatusShape, Tone, PlusIcon, BodySmText, Lockup } from "components.slint";
 
 /// One list row: name ellipsizes before the shape (the dot never clips).
 component SidebarRow inherits Rectangle {
@@ -113,29 +113,13 @@ export component Sidebar inherits Rectangle {
 
     VerticalLayout {
         // Lockup: mark + typeset wordmark.
-        // Lockup: the 20px mark (drawn from a padded SVG so its edge pixels
-        // are never clipped) with the wordmark centred on its box, as in
-        // the design system's lockup guideline.
+        // Lockup: 20px mark, wordmark centred on its circle.
         HorizontalLayout {
             padding-left: 18px;
-            padding-top: 18px;
-            spacing: 9px;
+            padding-top: 19px;
             alignment: start;
             height: 42px;
-            Image {
-                source: @image-url("assets/logo-mark.svg");
-                height: 24px;
-                width: 20px;
-                image-fit: contain;
-            }
-            Text {
-                text: "SPORA";
-                font-size: 13px;
-                font-weight: 700;
-                letter-spacing: 2.4px;
-                color: Theme.text-primary;
-                vertical-alignment: center;
-            }
+            Lockup { mark: 20px; }
         }
 
         // Aggregate status — the at-a-glance answer inside the window.
