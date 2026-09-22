@@ -112,15 +112,15 @@ export component Sidebar inherits Rectangle {
     background: Theme.surface-card;
 
     VerticalLayout {
-        // Lockup: 20px mark, wordmark centred on its circle. The artwork's
-        // top lands at 32px — the design's 12px band under the window
-        // controls plus its 20px padding — the extra 1px being the mark's
-        // air above the artwork.
+        // Lockup: 20px mark, wordmark centred on its circle. It sits on
+        // the caption line, its centre level with the detail pane's
+        // breadcrumb (the design had it a step lower): measured on the
+        // rendered window, both sets of capitals centre on row 27.
         HorizontalLayout {
             padding-left: 18px;
-            padding-top: 31px;
+            padding-top: 12px;
             alignment: start;
-            height: 54px;
+            height: 35px;
             Lockup { mark: 20px; }
         }
 
