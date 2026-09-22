@@ -86,7 +86,10 @@ icon toggles, because its button-down closes the flyout and its button-up
 arrives within the client's 400 ms guard. To test the toggle, promote the
 icon to the visible tray once (Settings › Personalization › Taskbar › Other
 system tray icons, or `IsPromoted=1` under
-`HKCU\Control Panel\NotifyIconSettings\<id>` for `spora-winui.exe`). Closing the main window
+`HKCU\Control Panel\NotifyIconSettings\<id>` for `spora-winui.exe`). The
+taskbar's UI Automation tree also goes stale for a while after a window
+hides, so `Invoke-TrayIcon` remembers the icon's last screen rectangle in
+`C:\SporaTest\tray-rect.txt` and falls back to a real mouse click there. Closing the main window
 hides it to the tray; "Open Spora" in the flyout or the tray menu brings it
 back. The tray icon's tooltip is the aggregate status, so `wt tray` also
 prints it.

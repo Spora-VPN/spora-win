@@ -417,11 +417,30 @@ function Find-TrayIcon {
 # Left-click the tray icon through UIA (toggles the flyout). Prints the
 # icon's name, which carries the tooltip = the aggregate status.
 function Invoke-TrayIcon {
+    $cache = Join-Path $WT_ROOT 'tray-rect.txt'
     $icon = Find-TrayIcon
-    if (-not $icon) { throw 'no Spora tray icon (is the UI running?)' }
-    $icon.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Start-Sleep -Milliseconds 1200
-    Write-Output "tray icon: '$($icon.Current.Name)'"
+    if ($icon) {
+        $r = $icon.Current.BoundingRectangle
+        Set-Content -Path $cache -Value ("{0},{1},{2},{3}" -f [int]$r.X, [int]$r.Y, [int]$r.Width, [int]$r.Height)
+        $icon.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+        Start-Sleep -Milliseconds 1200
+        Write-Output "tray icon: '$($icon.Current.Name)'"
+        return
+    }
+    # The taskbar's UIA tree can stay stale for a while after a window hides
+    # (the flyout closing, typically); fall back to a real click on the
+    # icon's last known rectangle, which does not move.
+    if (Test-Path $cache) {
+        $p = (Get-Content $cache -Raw).Trim().Split(',') | ForEach-Object { [int]$_ }
+        $x = $p[0] + [int]($p[2] / 2); $y = $p[1] + [int]($p[3] / 2)
+        [Wt.Native]::SetCursorPos($x, $y) | Out-Null; Start-Sleep -Milliseconds 120
+        [Wt.Native]::mouse_event(0x02, 0, 0, 0, [UIntPtr]::Zero); Start-Sleep -Milliseconds 50
+        [Wt.Native]::mouse_event(0x04, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 1200
+        Write-Output "tray icon: clicked last known rect at $x,$y (UIA lookup failed)"
+        return
+    }
+    throw 'no Spora tray icon (is the UI running?)'
 }
 
 # The flyout window: the smallest visible titled window of the process
