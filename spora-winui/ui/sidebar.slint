@@ -134,10 +134,11 @@ export component Sidebar inherits Rectangle {
             padding-top: 20px;
             spacing: 3px;
             // 14px, not the design's 12: an elided Text renders nothing when
-            // its box is shorter than one line of its font.
+            // its box is shorter than one line of its font — and the error
+            // sentence, 11.5px sans with its 1.3 line height, needs 16.
             for line in status-lines : HorizontalLayout {
                 spacing: 6px;
-                height: 14px;
+                height: line.tone == "error" ? 16px : 14px;
                 if line.shape != "" : Rectangle {
                     width: 8px;
                     StatusShape { state: line.shape; y: (parent.height - self.height) / 2; }

@@ -46,7 +46,7 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   UI state is pushed from Rust in one `render()` (main.rs); sessions are
   tokio tasks that own their gRPC stream, and stopping one aborts the task
   (dropping the stream is what tears the service session down).
-  `SPORA_UI_DEMO=states|share|empty|new|creating|banner` seeds every UI
+  `SPORA_UI_DEMO=states|share|empty|new|creating|banner|error` seeds every UI
   state without touching the service or the saved connections, and
   `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout, for screenshot matrices.
 

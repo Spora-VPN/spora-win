@@ -1138,8 +1138,8 @@ fn seed_demo(s: &mut AppState, mode: &str) {
         id
     };
     let mom = share("Mom's phone", Status::Sharing, "https://spora.to/s/4kd02mze7q", t - 141 * day, t - 600, None);
-    share("Alesya's phone", Status::Starting, "https://spora.to/s/8h2ks0qz1a", t - 30 * day, t - 3 * day, None);
-    share("Work laptop", Status::Error, "https://spora.to/s/0pl3mx7bq2", t - 12 * day, t - day, Some(("Couldn't start sharing.", "relay handshake timed out (relay.spora.to:443)")));
+    let alesya = share("Alesya's phone", Status::Starting, "https://spora.to/s/8h2ks0qz1a", t - 30 * day, t - 3 * day, None);
+    let work = share("Work laptop", Status::Error, "https://spora.to/s/0pl3mx7bq2", t - 12 * day, t - day, Some(("Couldn't start sharing.", "relay handshake timed out (relay.spora.to:443)")));
     share("Old tablet", Status::Inactive, "https://spora.to/s/x91ke2n0ma", t - 200 * day, t - 40 * day, None);
     let mut link = |label: &str, status: Status, url: &str, created: i64, last: i64| {
         let id = s.store.add_use(label.into(), url.into());
@@ -1174,6 +1174,17 @@ fn seed_demo(s: &mut AppState, mode: &str) {
             s.selected = Some((Role::Use, dana));
             s.pane = Pane::Detail;
             s.banner = Some("Couldn't connect. Ask your friend for a new link.".into());
+        }
+        "error" => {
+            // Nothing live, one failed share: the error is the headline
+            // (canvas 1h) in the sidebar, the flyout and the tray.
+            for id in [&mom, &alesya, &dana] {
+                let rt = s.rt(id);
+                rt.status = Status::Inactive;
+                rt.started_at = None;
+            }
+            s.selected = Some((Role::Share, work));
+            s.pane = Pane::Detail;
         }
         _ => {
             s.selected = Some((Role::Use, dana));
