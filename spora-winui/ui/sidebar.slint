@@ -124,11 +124,14 @@ export component Sidebar inherits Rectangle {
             Lockup { mark: 20px; }
         }
 
-        // Aggregate status — the at-a-glance answer inside the window.
+        // Aggregate status — the at-a-glance answer inside the window. Its
+        // first line sits on the same row as the detail pane's status row
+        // (measured: both centre on row 62), which also gives the lockup
+        // air below it.
         VerticalLayout {
             padding-left: 18px;
             padding-right: 18px;
-            padding-top: 12px;
+            padding-top: 20px;
             spacing: 3px;
             // 14px, not the design's 12: an elided Text renders nothing when
             // its box is shorter than one line of its font.
