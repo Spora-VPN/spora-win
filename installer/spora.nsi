@@ -5,6 +5,9 @@
 ;   WINTUN_DLL - path to wintun.dll
 ;   ICON_FILE   - path to spora.ico
 ;   OUTFILE_PATH - output installer exe path
+;   VERSION     - release version (the workspace version, e.g. 0.2.1)
+;   VERSION_NUMERIC - the same as four numeric fields (0.2.1.0) for
+;                 the installer's own version resource
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -16,6 +19,23 @@ OutFile "${OUTFILE_PATH}"
 InstallDir "$PROGRAMFILES64\Spora"
 InstallDirRegKey HKLM "Software\Spora" "InstallDir"
 RequestExecutionLevel admin
+
+!ifndef VERSION
+    !error "VERSION must be defined (build with build-winui.sh)"
+!endif
+!ifndef VERSION_NUMERIC
+    !error "VERSION_NUMERIC must be defined (build with build-winui.sh)"
+!endif
+
+; The installer's own file properties (Explorer's Details tab). No
+; LegalCopyright until the client has a licence of its own; silence the
+; "without standard key" warning that leaves.
+!pragma warning disable 9100
+VIProductVersion "${VERSION_NUMERIC}"
+VIAddVersionKey "ProductName" "Spora"
+VIAddVersionKey "FileDescription" "Spora Setup"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "FileVersion" "${VERSION}"
 
 ; ── Interface ────────────────────────────────────────────────────────
 
@@ -136,6 +156,8 @@ version may be pending removal. Please reboot and run this installer again."
     ; Add/Remove Programs registry
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora" \
         "DisplayName" "Spora"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora" \
+        "DisplayVersion" "${VERSION}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora" \
         "UninstallString" '"$INSTDIR\uninstall.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora" \

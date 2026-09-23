@@ -55,13 +55,28 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
 ```bash
 cargo build        # dev build works on Linux (Windows-only deps are cfg(windows)-gated)
 ./build-winui.sh   # release cross-compile (x86_64-pc-windows-gnu) + NSIS installer
+./scripts/release.sh  # the release ceremony (below)
 ```
 
 `tonic-build` requires `protoc`. `build-winui.sh` additionally needs the
-`x86_64-pc-windows-gnu` rustup target, ImageMagick (`convert`, icon from
-`assets/logo.svg`), NSIS (`makensis`), and curl/unzip; it downloads
+`x86_64-pc-windows-gnu` rustup target, the mingw `windres` (the exes' icon and
+version resources), NSIS (`makensis`), and curl/unzip; it downloads
 `wintun.dll` verified against a pinned SHA-256 and writes the installer to
-`~/winshare/spora-installer.exe`.
+`~/winshare/spora-installer.exe` (`--out` elsewhere).
+
+## Release
+
+The version lives in one place, `[workspace.package]` in `Cargo.toml`; it is
+stamped into both exes' version resources, the installer's file properties
+and its Add/Remove Programs entry, and the service log's first line
+(`spora-wincore <version> (release, core <version> <commit>)`).
+`./scripts/release.sh` is the release ceremony, the counterpart of
+spora-android's: it refuses unless `../spora` sits exactly at the ref in
+`.github/core-ref`, confirms the version, builds with `--locked` into
+`~/winshare/spora-<version>-setup.exe`, verifies the version stamp, and on
+clean trees offers an annotated `v<version>` tag recording the core commit,
+toolchain and installer SHA-256. Then `wt install <that file>` on the test
+laptop, and upload through the website admin. No code signing yet.
 
 ## Testing on the Windows box
 

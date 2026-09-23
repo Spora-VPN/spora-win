@@ -32,6 +32,7 @@ fn main() {
         .map(|w| w[1].clone());
 
     init_logging(log_file, service_mode);
+    log_build();
 
     #[cfg(windows)]
     if service_mode {
@@ -94,6 +95,20 @@ fn init_logging(log_file: Option<String>, service_mode: bool) {
         },
         None => builder.init(),
     }
+}
+
+/// Names this build at the top of every run, so the service log says which
+/// release (and which core commit) produced what follows.
+fn log_build() {
+    let core = spora_core::record::build_info();
+    info!(
+        "spora-wincore {} ({}, core {} {}{})",
+        env!("CARGO_PKG_VERSION"),
+        core.profile,
+        core.version,
+        core.commit.as_deref().unwrap_or("unknown-commit"),
+        if core.dirty { "-dirty" } else { "" },
+    );
 }
 
 /// Runs the gRPC control server until `shutdown` fires, then tears down any

@@ -1,3 +1,9 @@
 [workspace]
 members = ["spora-wincore", "spora-winui"]
 resolver = "3"
+
+# The client's release version: stamped into both executables' version
+# resources, the installer's file name and properties, and the Add/Remove
+# Programs entry. scripts/release.sh builds, verifies and tags from it.
+[workspace.package]
+version = "0.2.1"

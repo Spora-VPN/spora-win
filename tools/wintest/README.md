@@ -8,7 +8,8 @@ checked by whoever (or whatever) is making them, without touching the laptop.
 
 ```
 wt setup                  # once per box, and after editing win/agent.ps1 (wt push for the other scripts)
-wt install                # first install (silent NSIS), also for installer/upgrade tests
+wt install [installer]    # first install (silent NSIS), also for installer/upgrade tests;
+                          # given a file (a release artifact), installs it without building
 wt deploy                 # cargo build (release, gnu target) + swap exes into the install
 wt run [spora-url]        # launch the UI on the desktop, parked top-left
 wt shot [name]            # -> target/wintest/shots/<name>.png

@@ -82,7 +82,8 @@ Windows box (WT_HOST, default user@windows-box):
   push                     copy win/*.ps1 over only (lib/submit/deploy changes take effect at once)
   status                   service, processes, installed exe timestamps, agent heartbeat
   build [--ui|--core]      cargo build --release --target x86_64-pc-windows-gnu
-  install                  ./build-winui.sh + silent NSIS install (first install / installer & upgrade tests)
+  install [INSTALLER]      ./build-winui.sh + silent NSIS install (first install / installer & upgrade tests);
+                           with INSTALLER, installs that file instead of building (a release artifact)
   deploy [--ui|--core] [--no-build]
                            build, copy exes over, cycle the service / restart-free UI swap
   run [URL] [--log LEVEL] [--keep-windows]
@@ -147,9 +148,14 @@ case $cmd in
     ;;
 
   install)
-    (cd "$REPO" && ./build-winui.sh)
-    wscp "$HOME/winshare/spora-installer.exe" "$HOST:$WROOT_SCP/bin/"
-    wssh "Start-Process -FilePath '$WROOT\\bin\\spora-installer.exe' -ArgumentList '/S' -Wait; Start-Sleep 2;
+    installer=${1:-}
+    if [ -z "$installer" ]; then
+      (cd "$REPO" && ./build-winui.sh)
+      installer="$HOME/winshare/spora-installer.exe"
+    fi
+    [ -f "$installer" ] || die "install: no such installer: $installer"
+    wscp "$installer" "$HOST:$WROOT_SCP/bin/"
+    wssh "Start-Process -FilePath '$WROOT\\bin\\$(basename "$installer")' -ArgumentList '/S' -Wait; Start-Sleep 2;
       'service: ' + [string](Get-Service Spora -ErrorAction SilentlyContinue).Status;
       \$inst = Split-Path -Parent (((Get-CimInstance Win32_Service -Filter \"Name='Spora'\" -ErrorAction SilentlyContinue).PathName) -replace '^\"([^\"]+)\".*$','\$1'); 'install dir: ' + \$inst;
       Get-Item \"\$inst\\*\" | Format-Table -AutoSize Name,Length,LastWriteTime"

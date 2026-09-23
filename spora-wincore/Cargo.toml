@@ -1,6 +1,6 @@
 [package]
 name = "spora-wincore"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 
 [dependencies]
@@ -32,3 +32,6 @@ windows-sys = { version = "0.52", features = [
 
 [build-dependencies]
 tonic-build = "0.13"
+# Version resource for the Windows executable; uses the mingw windres for
+# the gnu target.
+winresource = "0.1"
