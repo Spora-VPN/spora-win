@@ -4,14 +4,15 @@
 // are ours (chrome.slint). Dialogs float over a smoke layer; the tray
 // flyout is a separate window exported from here.
 
-import { Theme, ConnectionItem, StatusLine } from "theme.slint";
+import { Theme, ConnectionItem, StatusLine, OwnRelayItem } from "theme.slint";
 import { Sidebar } from "sidebar.slint";
 import { DetailPane, EmptyPane, NewSharePane, CreatingPane, ErrorBanner } from "detail.slint";
-import { ConnectDialog, DeleteDialog } from "dialogs.slint";
+import { SettingsPane } from "settings.slint";
+import { ConnectDialog, DeleteDialog, RelayDialog, RemoveRelayDialog, RequiredDialog } from "dialogs.slint";
 import { CaptionArea, WindowControls } from "chrome.slint";
 import { TrayFlyout } from "flyout.slint";
 
-export { TrayFlyout, ConnectionItem, StatusLine }
+export { TrayFlyout, ConnectionItem, StatusLine, OwnRelayItem }
 
 export component AppWindow inherits Window {
     title: "Spora";
@@ -37,9 +38,28 @@ export component AppWindow inherits Window {
     in property <ConnectionItem> selected;
     in property <[float]> selected-bars;
     in property <string> selected-elapsed;
-    in property <string> pane: "empty";   // "empty" | "detail" | "new-share" | "creating"
+    in property <string> pane: "empty";   // "empty" | "detail" | "new-share" | "creating" | "settings"
     in property <string> banner;
+    in property <string> banner-action;   // the banner's fix, e.g. "OPEN SETTINGS"; "" = none
     in property <bool> maximized;
+
+    // Settings (pushed from Rust; see SettingsPane)
+    in-out property <string> settings-tab: "relays";
+    in property <bool> settings-alert;
+    in property <bool> use-spora;
+    in property <bool> relays-available;
+    in property <string> spora-shape;
+    in property <string> spora-text;
+    in property <[OwnRelayItem]> own-relays;
+    in property <bool> telemetry-available;
+    in property <bool> telemetry-on;
+    in property <bool> telemetry-busy;
+    in property <string> telemetry-shape;
+    in property <string> telemetry-text;
+    in property <string> device-id;
+    in property <string> last-upload;
+    in property <string> report-state;
+    in property <string> report-text;
 
     // ── UI-local state ───────────────────────────────────────────────
     in-out property <string> new-share-name;
@@ -54,6 +74,18 @@ export component AppWindow inherits Window {
     in-out property <string> delete-id;
     in-out property <string> delete-role;
     in-out property <string> delete-label;
+    in-out property <bool> show-relay-dialog;
+    in-out property <string> relay-original;   // "" = adding a relay
+    in-out property <bool> relay-had-token;
+    in-out property <string> relay-endpoint;
+    in-out property <string> relay-token;
+    in-out property <bool> relay-clear-token;
+    in-out property <string> relay-error;
+    in-out property <bool> relay-busy;
+    in-out property <bool> show-remove-relay-dialog;
+    in-out property <string> remove-relay-endpoint;
+    in-out property <bool> show-required-dialog;
+    in property <string> required-notice;
 
     // ── Callbacks ────────────────────────────────────────────────────
     callback select(role: string, id: string);
@@ -68,6 +100,16 @@ export component AppWindow inherits Window {
     callback finish-new-share(id: string, label: string);
     callback dialog-save(url: string, name: string);
     callback dismiss-banner();
+    callback banner-act();
+    callback open-settings();
+    callback settings-tab-changed(tab: string);
+    callback set-use-spora(on: bool);
+    callback relay-save(original: string, endpoint: string, token: string, clear-token: bool);
+    callback relay-remove(endpoint: string);
+    callback set-telemetry(on: bool);
+    callback save-report();
+    callback show-report();
+    callback required-closed(contact: bool);
     // Window chrome
     callback start-drag();
     callback show-window-menu(x: length, y: length);
@@ -97,10 +139,13 @@ export component AppWindow inherits Window {
             uses: root.uses;
             status-lines: root.status-lines;
             selected-id: root.selected-id;
-            selected-role: root.selected-role;
+            selected-role: root.pane == "settings" ? "" : root.selected-role;
+            settings-selected: root.pane == "settings";
+            settings-alert: root.settings-alert;
             select(role, id) => { root.renaming = false; root.select(role, id); }
             share-new => { root.share-new(); }
             connect-new => { root.connect-new(); }
+            open-settings => { root.renaming = false; root.open-settings(); }
         }
         Rectangle {
             horizontal-stretch: 1;
@@ -110,7 +155,12 @@ export component AppWindow inherits Window {
                     padding-left: 30px;
                     padding-right: 30px;
                     padding-top: 40px;   // clear of the caption strip and its controls
-                    ErrorBanner { text: root.banner; dismiss => { root.dismiss-banner(); } }
+                    ErrorBanner {
+                        text: root.banner;
+                        action-label: root.banner-action;
+                        action => { root.banner-act(); }
+                        dismiss => { root.dismiss-banner(); }
+                    }
                 }
                 if root.pane == "empty" : EmptyPane {
                     share-new => { root.share-new(); }
@@ -143,6 +193,50 @@ export component AppWindow inherits Window {
                 if root.pane == "creating" : CreatingPane {
                     cancel => { root.cancel-new-share(); }
                 }
+                if root.pane == "settings" : SettingsPane {
+                    tab <=> root.settings-tab;
+                    use-spora: root.use-spora;
+                    relays-available: root.relays-available;
+                    spora-shape: root.spora-shape;
+                    spora-text: root.spora-text;
+                    own-relays: root.own-relays;
+                    telemetry-available: root.telemetry-available;
+                    telemetry-on: root.telemetry-on;
+                    telemetry-busy: root.telemetry-busy;
+                    telemetry-shape: root.telemetry-shape;
+                    telemetry-text: root.telemetry-text;
+                    device-id: root.device-id;
+                    last-upload: root.last-upload;
+                    report-state: root.report-state;
+                    report-text: root.report-text;
+                    tab-changed(t) => { root.settings-tab-changed(t); }
+                    set-use-spora(v) => { root.set-use-spora(v); }
+                    add-relay => {
+                        root.relay-original = "";
+                        root.relay-had-token = false;
+                        root.relay-endpoint = "";
+                        root.relay-token = "";
+                        root.relay-clear-token = false;
+                        root.relay-error = "";
+                        root.relay-busy = false;
+                        root.show-relay-dialog = true;
+                    }
+                    edit-relay(r) => {
+                        root.relay-original = r.endpoint;
+                        root.relay-had-token = r.has-token;
+                        root.relay-endpoint = r.endpoint;
+                        root.relay-token = "";
+                        root.relay-clear-token = false;
+                        root.relay-error = "";
+                        root.relay-busy = false;
+                        root.show-relay-dialog = true;
+                    }
+                    remove-relay(e) => { root.remove-relay-endpoint = e; root.show-remove-relay-dialog = true; }
+                    set-telemetry(v) => { root.set-telemetry(v); }
+                    copy(t) => { root.copy(t); }
+                    save-report => { root.save-report(); }
+                    show-report => { root.show-report(); }
+                }
             }
         }
     }
@@ -163,6 +257,30 @@ export component AppWindow inherits Window {
         url-error: root.dialog-url-error;
         save(url, name) => { root.dialog-save(url, name); }
         cancel => { root.show-connect-dialog = false; root.dialog-url-error = ""; }
+    }
+
+    if root.show-relay-dialog : RelayDialog {
+        editing: root.relay-original != "";
+        had-token: root.relay-had-token;
+        error: root.relay-error;
+        busy: root.relay-busy;
+        endpoint <=> root.relay-endpoint;
+        token <=> root.relay-token;
+        clear-token <=> root.relay-clear-token;
+        save => { root.relay-save(root.relay-original, root.relay-endpoint, root.relay-token, root.relay-clear-token); }
+        cancel => { root.show-relay-dialog = false; }
+    }
+
+    if root.show-remove-relay-dialog : RemoveRelayDialog {
+        endpoint: root.remove-relay-endpoint;
+        confirm => { root.show-remove-relay-dialog = false; root.relay-remove(root.remove-relay-endpoint); }
+        cancel => { root.show-remove-relay-dialog = false; }
+    }
+
+    if root.show-required-dialog : RequiredDialog {
+        message: root.required-notice;
+        keep => { root.show-required-dialog = false; root.required-closed(false); }
+        contact => { root.show-required-dialog = false; root.required-closed(true); }
     }
 
     if root.show-delete-dialog : DeleteDialog {

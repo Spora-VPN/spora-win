@@ -9,6 +9,13 @@ spora-core = { path = "../../spora/spora-core" }
 # Client-side host integration (wintun adapter, routes, resolver, MTU,
 # outer-socket bypass) — the same crate `spora use` is built on.
 spora-vpn = { path = "../../spora/spora-vpn" }
+# The service layer every Spora client links: the device identity and the
+# access to Spora's relays, the diagnostic log, crash files, connection-record
+# upload (telemetry) and bug-report bundles.
+spora-service = { path = "../../spora/spora-service" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+percent-encoding = "2"
 base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 tonic = "0.13"
@@ -22,12 +29,14 @@ tokio-util = "0.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.7"
-# The control pipe's DACL (src/pipe.rs). The tunnel adapter, routes and
-# resolver are spora-vpn's business.
+# The control pipe's DACL (src/pipe.rs), the private state directories'
+# DACL (src/paths.rs) and the DPAPI-kept state key (src/secret.rs). The
+# tunnel adapter, routes and resolver are spora-vpn's business.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
 ] }
 
 [build-dependencies]

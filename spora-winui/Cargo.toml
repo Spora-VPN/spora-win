@@ -16,6 +16,8 @@ env_logger = "0.11"
 uuid = { version = "1", features = ["v4"] }
 arboard = "3"
 chrono = "0.4"
+# Share blobs in the saved-connections file.
+base64 = "0.22"
 # Tray icon (state-shaped, rendered from the mono mark at runtime) + its
 # right-click menu. Both are cross-platform crates, gated to Windows below.
 resvg = "0.46"

@@ -18,10 +18,12 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   (DACL: SYSTEM/Admins full, interactive users connect-only), on Linux dev
   builds over `[::1]:50051` TCP. Sessions are tied to their event stream:
   when the client drops the stream, the session (and its routes) is torn
-  down. The proto's `ShareRequest.key` field carries base64url(identity
-  bytes), or empty to generate fresh. Connection log lives under
-  `%PROGRAMDATA%\Spora\connlog\<routing-key>` (proto fields control it);
-  service log at `%PROGRAMDATA%\Spora\spora-wincore.log`.
+  down. It links the core's `spora-service` like the CLI does: the device
+  identity, Spora-managed relays, the diagnostic log, connection records,
+  telemetry and bug reports (see "Relays, shares and telemetry" below).
+  Connection log lives under `%PROGRAMDATA%\Spora\connlog\<routing hash>`
+  (proto fields control it); human-readable service log at
+  `%PROGRAMDATA%\Spora\spora-wincore.log`.
 - **spora-winui** — Slint desktop UI. Pure gRPC client of wincore — no
   dependency on spora-core; its `build.rs` compiles
   `../spora-wincore/proto/spora.proto`. Runs unelevated; connects to the
@@ -46,9 +48,66 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   UI state is pushed from Rust in one `render()` (main.rs); sessions are
   tokio tasks that own their gRPC stream, and stopping one aborts the task
   (dropping the stream is what tears the service session down).
-  `SPORA_UI_DEMO=states|share|empty|new|creating|banner|error` seeds every UI
-  state without touching the service or the saved connections, and
-  `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout, for screenshot matrices.
+  Settings (the sidebar's foot) is a pane with two tabs, Relays and
+  Telemetry (`ui/settings.slint`, `src/settings.rs`); it was designed in the
+  window's vocabulary after the Android app's Settings, not on the design
+  canvas.
+  `SPORA_UI_DEMO=states|share|empty|new|creating|banner|error|linklost|settings|relaydialog|telemetry|required|norelays`
+  seeds every UI state without touching the service or the saved
+  connections, and `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout, for
+  screenshot matrices.
+
+## Relays, shares and telemetry
+
+The core's `spora-service` holds the device identity (one key pair per
+machine), the access to Spora's relays and the telemetry switch; wincore
+links it (`src/backend.rs`) and the UI reaches it over gRPC. Core docs: `../spora/AGENTS.md`
+("Identity, shares, persistence", "Relay access", "Diagnostic log and
+telemetry"). The Android client (`../spora-android`) is the reference UI.
+
+- **Shares are blobs.** `MakeShare` makes one on the relays the settings
+  name (Spora's advised relays first, then the user's own) and returns it
+  with its URL, a pure function of it; the UI stores it base64 in
+  `connections.json` (`SharedConnection.share`) and starts it with
+  `Share{share}`. Other relays mean a new share, a new URL. A share made
+  under another device identity (the service state was lost) fails with
+  `SHARE_ERROR_CODE_IDENTITY_MISMATCH`; the UI then offers MAKE A NEW LINK
+  (a new share under the same entry and name, through the handoff pane).
+- **Relay settings are the service's, machine-wide** (`src/relays.rs`,
+  `%ProgramData%\Spora\service\relays.json`): Spora's relays on/off (on by
+  default) and own relays (`?r=` form, checked by `relays::parse` with a
+  reason per error; an optional token sent as a static credential, DPAPI-
+  sealed on disk and never returned to the UI). The service keeps the relay
+  token fresh while Spora's relays are on or a running share uses them
+  (`set_relay_access`); running shares register their credentials in the
+  session store, so renewed tokens reach them. `MakeShare` fetches advice
+  first only when none is cached.
+- **State and secrets** (`src/paths.rs`, `src/secret.rs`): everything under
+  `%ProgramData%\Spora`; `service\`, `diag\`, `records\` and `reports\` get a
+  protected DACL (SYSTEM + Administrators). `service.json`'s secrets are
+  sealed with a 32-byte state key kept in `service\state.key` as a DPAPI blob
+  (LocalSystem, purpose entropy): written before first use; one that does
+  not open (another machine, a restored backup) is replaced, which is a
+  fresh device by design. Linux dev builds keep the same layout under
+  `$SPORA_WINCORE_DATA` (else `$XDG_STATE_HOME/spora-wincore`), in the clear.
+- **Diagnostics**: wincore's logger is spora-service's composite one — the
+  diagnostic log file (`diag\`, JSON Lines, secrets redacted, crash files
+  from the panic hook) plus the human-readable log. Every share and connect
+  keeps a connection record in `records\`. The uploader runs in the service
+  (uploads off by default, per machine); a stop makes one last pass (≤ 3 s).
+  `ExportBugReport` zips the last days in the service and streams it; the UI
+  saves it to the user's Downloads (Settings › Telemetry › SAVE REPORT). The
+  account's force flag refuses a switch-off (`refused_required`) and the UI
+  shows the agreed notice (also once when the service says it is pending,
+  then acknowledges it). Never log a share URL: the human-readable log is
+  not redacted.
+- **Never contact production from development.** The API is `SPORA_API`
+  (comma-separated, as the CLI reads it) from the service's environment,
+  else the built-in production API on Windows; Linux dev builds without it
+  use `http://127.0.0.1:9` (answers nothing). On the test laptop, pin it in
+  the service's registry `Environment` (`HKLM\SYSTEM\CurrentControlSet\
+  Services\Spora`, REG_MULTI_SZ `SPORA_API=...`) before deploying a build
+  that will register.
 
 ## Build
 

@@ -89,27 +89,25 @@ impl GrpcClient {
         })
     }
 
-    pub async fn make_secret_key(&self) -> Result<String, String> {
+    /// A new share on the relays the service's settings name.
+    pub async fn make_share(&self) -> Result<MakeShareResponse, String> {
         let resp = self
             .inner
             .clone()
-            .make_secret_key(MakeSecretKeyRequest {})
+            .make_share(MakeShareRequest {})
             .await
-            .map_err(|e| format!("MakeSecretKey RPC failed: {e}"))?;
-        Ok(resp.into_inner().key)
+            .map_err(|e| format!("MakeShare RPC failed: {e}"))?;
+        Ok(resp.into_inner())
     }
 
-    pub async fn share(
-        &self,
-        key: String,
-    ) -> Result<tonic::Streaming<ShareEvent>, String> {
+    pub async fn share(&self, share: Vec<u8>) -> Result<tonic::Streaming<ShareEvent>, String> {
         let resp = self
             .inner
             .clone()
             // Connection-log fields at their defaults: logging enabled in the
             // service's default directory with default retention.
             .share(ShareRequest {
-                key,
+                share,
                 disable_conn_log: false,
                 conn_log_dir: String::new(),
                 conn_log_retention_days: 0,
@@ -118,6 +116,117 @@ impl GrpcClient {
             .await
             .map_err(|e| format!("Share RPC failed: {e}"))?;
         Ok(resp.into_inner())
+    }
+
+    pub async fn relay_settings(&self) -> Result<RelaySettings, String> {
+        Ok(self
+            .inner
+            .clone()
+            .get_relay_settings(GetRelaySettingsRequest {})
+            .await
+            .map_err(|e| format!("GetRelaySettings RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn set_spora_relays(&self, use_spora: bool) -> Result<RelaySettings, String> {
+        Ok(self
+            .inner
+            .clone()
+            .set_spora_relays(SetSporaRelaysRequest { use_spora })
+            .await
+            .map_err(|e| format!("SetSporaRelays RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    /// Add (`original` empty) or change an own relay.
+    pub async fn put_own_relay(
+        &self,
+        original: String,
+        endpoint: String,
+        token_action: TokenAction,
+        token: String,
+    ) -> Result<PutOwnRelayResponse, String> {
+        Ok(self
+            .inner
+            .clone()
+            .put_own_relay(PutOwnRelayRequest {
+                original,
+                endpoint,
+                token_action: token_action as i32,
+                token,
+            })
+            .await
+            .map_err(|e| format!("PutOwnRelay RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn remove_own_relay(&self, endpoint: String) -> Result<RelaySettings, String> {
+        Ok(self
+            .inner
+            .clone()
+            .remove_own_relay(RemoveOwnRelayRequest { endpoint })
+            .await
+            .map_err(|e| format!("RemoveOwnRelay RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn refresh_relays(&self) -> Result<RelaySettings, String> {
+        Ok(self
+            .inner
+            .clone()
+            .refresh_relays(RefreshRelaysRequest {})
+            .await
+            .map_err(|e| format!("RefreshRelays RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn telemetry(&self) -> Result<TelemetryStatus, String> {
+        Ok(self
+            .inner
+            .clone()
+            .get_telemetry(GetTelemetryRequest {})
+            .await
+            .map_err(|e| format!("GetTelemetry RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn set_telemetry(&self, enabled: bool) -> Result<SetTelemetryResponse, String> {
+        Ok(self
+            .inner
+            .clone()
+            .set_telemetry(SetTelemetryRequest { enabled })
+            .await
+            .map_err(|e| format!("SetTelemetry RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    pub async fn acknowledge_telemetry_notice(&self) -> Result<TelemetryStatus, String> {
+        Ok(self
+            .inner
+            .clone()
+            .acknowledge_telemetry_notice(AcknowledgeTelemetryNoticeRequest {})
+            .await
+            .map_err(|e| format!("AcknowledgeTelemetryNotice RPC failed: {e}"))?
+            .into_inner())
+    }
+
+    /// The bug-report zip, whole.
+    pub async fn export_bug_report(&self, note: String) -> Result<Vec<u8>, String> {
+        let mut stream = self
+            .inner
+            .clone()
+            .export_bug_report(ExportBugReportRequest { note })
+            .await
+            .map_err(|e| e.message().to_string())?
+            .into_inner();
+        let mut zip = Vec::new();
+        while let Some(chunk) = stream.message().await.map_err(|e| e.message().to_string())? {
+            zip.extend_from_slice(&chunk.data);
+        }
+        if zip.is_empty() {
+            return Err("the report came back empty".into());
+        }
+        Ok(zip)
     }
 
     pub async fn connect_vpn(

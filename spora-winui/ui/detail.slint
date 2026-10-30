@@ -36,6 +36,9 @@ component StatusRow inherits HorizontalLayout {
 
 export component ErrorBanner inherits Rectangle {
     in property <string> text;
+    /// An optional fix next to DISMISS ("OPEN SETTINGS").
+    in property <string> action-label;
+    callback action();
     callback dismiss();
     background: Theme.surface-error-tint;
     border-width: 1px;
@@ -61,9 +64,17 @@ export component ErrorBanner inherits Rectangle {
                 min-height: 32px;
             }
         }
-        Rectangle {
-            width: 70px;
-            MicroButton { text: "DISMISS"; text-color: Theme.text-muted; y: (parent.height - self.height) / 2; clicked => { root.dismiss(); } }
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
+            if root.action-label != "" : VerticalLayout {
+                alignment: center;
+                MicroButton { text: root.action-label; clicked => { root.action(); } }
+            }
+            VerticalLayout {
+                alignment: center;
+                MicroButton { text: "DISMISS"; text-color: Theme.text-muted; clicked => { root.dismiss(); } }
+            }
         }
     }
 }
@@ -87,6 +98,8 @@ export component DetailPane inherits VerticalLayout {
     property <bool> pending: item.status == "starting" || item.status == "connecting";
     property <bool> on: active || pending;
     property <bool> error: item.status == "error";
+    /// The error says the link no longer works: MAKE A NEW LINK.
+    property <bool> needs-link: error && item.error-action == "new-link";
     property <string> shape: active ? "active" : pending ? "pending" : error ? "error" : "";
     property <string> status-text: is-share
         ? (active ? "↑ SHARING" : pending ? "↑ STARTING…" : "INACTIVE")
@@ -98,6 +111,7 @@ export component DetailPane inherits VerticalLayout {
     property <string> toggle-hint: is-share
         ? (active ? "Your internet is available at this link."
            : pending ? "Setting up the link. Turn off to cancel."
+           : needs-link ? "Make a new link and send it again."
            : error ? "Turn on to try again."
            : "Turn on to make your internet available at this link.")
         : (active ? "All this PC's traffic goes through «" + item.label + "»."
@@ -195,7 +209,10 @@ export component DetailPane inherits VerticalLayout {
         if item.error-detail != "" : DataText { text: item.error-detail; color: Theme.text-muted; wrap: word-wrap; }
         HorizontalLayout {
             alignment: start;
-            MicroButton { text: "RETRY →"; clicked => { root.retry(item.role, item.id); } }
+            MicroButton {
+                text: needs-link ? "MAKE A NEW LINK →" : "RETRY →";
+                clicked => { root.retry(item.role, item.id); }
+            }
         }
     }
 

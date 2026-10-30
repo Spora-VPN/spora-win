@@ -8,6 +8,7 @@
 //! the window is closed.
 
 mod grpc;
+mod settings;
 mod store;
 mod toast;
 mod tray;
@@ -88,6 +89,8 @@ struct Runtime {
     status: Status,
     /// (friendly sentence, underlying detail) while `status == Error`.
     error: Option<(String, String)>,
+    /// What the error offers the user.
+    error_action: ErrorAction,
     started_at: Option<Instant>,
     /// Bumped each time a session task starts for this id; a task only
     /// touches state on teardown if it is still the current generation, so a
@@ -98,12 +101,37 @@ struct Runtime {
     task: Option<tokio::task::AbortHandle>,
 }
 
+/// What an error state offers: try the same again, or — the share's link
+/// can no longer be served (the device identity was reset) — make a new
+/// link for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum ErrorAction {
+    #[default]
+    Retry,
+    NewLink,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Pane {
     Empty,
     Detail,
     NewShare,
     Creating,
+    Settings,
+}
+
+/// The unattributed error banner (canvas 2d), optionally with the fix.
+#[derive(Clone, Debug)]
+struct Banner {
+    text: String,
+    /// Offer OPEN SETTINGS (the relays are the fix).
+    settings: bool,
+}
+
+impl Banner {
+    fn plain(text: impl Into<String>) -> Self {
+        Self { text: text.into(), settings: false }
+    }
 }
 
 struct AppState {
@@ -114,8 +142,13 @@ struct AppState {
     /// Id of the share whose link is being created (canvas 3a); None once
     /// the handoff pane (2c) took over or creation was cancelled.
     creating: Option<String>,
+    /// The link being created replaces an existing share's (MAKE A NEW
+    /// LINK): cancelling stops it but keeps the entry.
+    creating_replaces: bool,
     /// Unattributed error banner above the detail content (canvas 2d).
-    banner: Option<String>,
+    banner: Option<Banner>,
+    /// Settings: what the service last said, and the page's own state.
+    settings: settings::SettingsState,
     service_online: bool,
     /// SPORA_UI_DEMO: seeded states, no service — for screenshot matrices.
     demo: bool,
@@ -174,8 +207,14 @@ impl AppState {
         let rt = self.rt(id);
         rt.status = Status::Error;
         rt.error = Some((friendly.to_string(), detail.into()));
+        rt.error_action = ErrorAction::Retry;
         rt.started_at = None;
         rt.task = None;
+    }
+    /// The share's link can no longer be served: the error offers a new one.
+    fn set_link_lost(&mut self, id: &str, friendly: &str, detail: impl Into<String>) {
+        self.set_error(id, friendly, detail);
+        self.rt(id).error_action = ErrorAction::NewLink;
     }
 }
 
@@ -187,6 +226,8 @@ struct Ctx {
     flyout: slint::Weak<TrayFlyout>,
     rt: tokio::runtime::Handle,
     client: Arc<Mutex<Option<GrpcClient>>>,
+    /// Wakes the settings poll at once (the page opened, a tab changed).
+    poke: Arc<tokio::sync::Notify>,
 }
 
 impl Ctx {
@@ -328,6 +369,7 @@ fn item_for(s: &AppState, role: Role, id: &str) -> Option<ConnectionItem> {
         .and_then(|r| r.error.clone())
         .filter(|_| status == Status::Error)
         .unwrap_or_default();
+    let error_action = if needs_new_link(s, role, id) { "new-link" } else { "retry" };
     let (label, url, created, last) = match role {
         Role::Share => {
             let c = s.store.shared.iter().find(|c| c.id == id)?;
@@ -346,6 +388,7 @@ fn item_for(s: &AppState, role: Role, id: &str) -> Option<ConnectionItem> {
         url: url.into(),
         status: status.as_str().into(),
         error: error.into(),
+        error_action: error_action.into(),
         error_detail: detail.into(),
         created: fmt_date(created).into(),
         last_activity: fmt_datetime(last).into(),
@@ -431,7 +474,7 @@ fn tray_state(s: &AppState) -> TrayState {
 /// small, and it is the only way anything reaches the screen.
 fn render(ctx: &Ctx) {
     let Some(app) = ctx.app.upgrade() else { return };
-    let s = ctx.lock();
+    let mut s = ctx.lock();
 
     let shares: Vec<ConnectionItem> = s
         .store
@@ -480,10 +523,13 @@ fn render(ctx: &Ctx) {
             Pane::Detail => "detail",
             Pane::NewShare => "new-share",
             Pane::Creating => "creating",
+            Pane::Settings => "settings",
         }
         .into(),
     );
-    app.set_banner(s.banner.clone().unwrap_or_default().into());
+    app.set_banner(s.banner.as_ref().map(|b| b.text.clone()).unwrap_or_default().into());
+    app.set_banner_action(if s.banner.as_ref().is_some_and(|b| b.settings) { "OPEN SETTINGS" } else { "" }.into());
+    settings::push(&app, &mut s);
 
     if let Some(flyout) = ctx.flyout.upgrade() {
         flyout.set_shares(slint::VecModel::from_slice(&shares));
@@ -619,7 +665,7 @@ fn show_flyout(flyout: &TrayFlyout, x: f64, y: f64, icon: (f64, f64, f64, f64)) 
 // ── Session tasks ────────────────────────────────────────────────────
 
 /// Start (or restart) a share session for `id`; runs until its stream ends.
-async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, key: String) {
+async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, share: Vec<u8>) {
     let my_gen = {
         let mut s = ctx.lock();
         let rt = s.rt(&id);
@@ -631,7 +677,7 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, key: String) {
     };
     ctx.refresh();
 
-    let mut stream = match grpc.share(key).await {
+    let mut stream = match grpc.share(share).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("Share RPC failed: {e}");
@@ -703,10 +749,19 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, key: String) {
             share_event::Event::Error(err) => {
                 log::error!("Share error: {}", err.message);
                 let label = s.label(Role::Share, &id);
-                s.set_error(&id, "Couldn't start sharing.", err.message.clone());
+                let lost = err.code == ShareErrorCode::IdentityMismatch as i32;
+                if lost {
+                    s.set_link_lost(&id, settings::LINK_RESET, err.message.clone());
+                } else {
+                    s.set_error(&id, "Couldn't start sharing.", err.message.clone());
+                }
                 s.leave_creating(&id);
                 drop(s);
-                toast::show("Couldn't start sharing", &format!("«{label}»: {}", err.message));
+                if lost {
+                    toast::show("Couldn't start sharing", &format!("«{label}»: this link no longer works. Make a new link and send it again."));
+                } else {
+                    toast::show("Couldn't start sharing", &format!("«{label}»: {}", err.message));
+                }
                 ended_in_error = true;
                 break;
             }
@@ -718,7 +773,7 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, key: String) {
             }
             share_event::Event::ConnLogDegraded(d) => {
                 log::error!("Connection log degraded: {}", d.detail);
-                s.banner = Some(format!("The connection log couldn't be written: {}", d.detail));
+                s.banner = Some(Banner::plain(format!("The connection log couldn't be written: {}", d.detail)));
                 drop(s);
                 ctx.refresh();
             }
@@ -865,15 +920,15 @@ fn start(ctx: &Ctx, role: Role, id: &str) {
         return;
     }
     let Some(grpc) = ctx.client() else {
-        s.banner = Some("Can't reach the Spora service yet. Retrying…".into());
+        s.banner = Some(Banner::plain("Can't reach the Spora service yet. Retrying…"));
         drop(s);
         render(ctx);
         return;
     };
     let task = match role {
         Role::Share => {
-            let Some(key) = s.store.shared.iter().find(|c| c.id == id).map(|c| c.secret_key.clone()) else { return };
-            ctx.rt.spawn(run_share(ctx.clone(), grpc, id.to_string(), key))
+            let Some(share) = s.store.shared.iter().find(|c| c.id == id).map(|c| c.share.clone()) else { return };
+            ctx.rt.spawn(run_share(ctx.clone(), grpc, id.to_string(), share))
         }
         Role::Use => {
             let Some(url) = s.store.uses.iter().find(|c| c.id == id).map(|c| c.url.clone()) else { return };
@@ -914,19 +969,33 @@ fn stop(ctx: &Ctx, role: Role, id: &str) {
 }
 
 fn share_new(ctx: &Ctx, app: &AppWindow) {
+    make_link(ctx, app, None);
+}
+
+/// Make a new share on the relays the settings name and start it: the busy
+/// pane (canvas 3a), then the handoff (2c). `replace`: the share whose link
+/// no longer works gets the new one, keeping its name and place.
+fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
     let mut s = ctx.lock();
     if s.creating.is_some() {
         return;
     }
+    let prefill = replace.as_ref().map(|id| s.label(Role::Share, id)).unwrap_or_default();
     if s.demo {
         // Simulate the busy moment, then the handoff.
-        let label = s.store.next_label(true);
-        let id = s.store.add_shared(label, String::new());
+        let id = match &replace {
+            Some(id) => id.clone(),
+            None => {
+                let label = s.store.next_label(true);
+                s.store.add_shared(label, b"demo".to_vec(), String::new())
+            }
+        };
         s.selected = Some((Role::Share, id.clone()));
         s.pane = Pane::Creating;
         s.creating = Some(id.clone());
+        s.creating_replaces = replace.is_some();
         drop(s);
-        app.set_new_share_name("".into());
+        app.set_new_share_name(prefill.into());
         render(ctx);
         let ctx2 = ctx.clone();
         slint::Timer::single_shot(Duration::from_millis(1500), move || {
@@ -936,9 +1005,10 @@ fn share_new(ctx: &Ctx, app: &AppWindow) {
             }
             s.creating = None;
             s.pane = Pane::NewShare;
-            s.store.set_share_url(&id, "https://spora.to/s/9q1x84hh2m");
+            s.store.set_share_url(&id, "https://spora.to/s/AbuF2kq0pD3x9mHq7LwZcE5nT8vRyJ4aGs6oXbKe1fUiPhNtMlWdQz");
             let rt = s.rt(&id);
             rt.status = Status::Sharing;
+            rt.error = None;
             rt.started_at = Some(Instant::now());
             drop(s);
             render(&ctx2);
@@ -946,38 +1016,59 @@ fn share_new(ctx: &Ctx, app: &AppWindow) {
         return;
     }
     let Some(grpc) = ctx.client() else {
-        s.banner = Some("Can't reach the Spora service yet. Retrying…".into());
+        s.banner = Some(Banner::plain("Can't reach the Spora service yet. Retrying…"));
         drop(s);
         render(ctx);
         return;
     };
-    // Reserve the busy pane right away; the id arrives with the key.
+    // Reserve the busy pane right away; the id arrives with the share.
     s.creating = Some(String::new());
+    s.creating_replaces = replace.is_some();
     s.pane = Pane::Creating;
+    if let Some(id) = &replace {
+        s.selected = Some((Role::Share, id.clone()));
+    }
     drop(s);
-    app.set_new_share_name("".into());
+    app.set_new_share_name(prefill.into());
     render(ctx);
 
     let ctx2 = ctx.clone();
     ctx.rt.spawn(async move {
-        let key = grpc.make_secret_key().await;
+        let made = grpc.make_share().await;
         let mut s = ctx2.lock();
         if s.creating.as_deref() != Some("") {
-            return; // cancelled while the key was being made
+            return; // cancelled while the share was being made
         }
-        match key {
-            Ok(key) => {
-                let label = s.store.next_label(true);
-                let id = s.store.add_shared(label, key.clone());
+        match made {
+            Ok(m) if m.error == MakeShareError::Ok as i32 => {
+                let id = match &replace {
+                    Some(id) if s.exists(Role::Share, id) => {
+                        s.store.replace_share(id, m.share.clone(), m.url.clone());
+                        id.clone()
+                    }
+                    _ => {
+                        let label = s.store.next_label(true);
+                        s.store.add_shared(label, m.share.clone(), m.url.clone())
+                    }
+                };
                 s.selected = Some((Role::Share, id.clone()));
                 s.creating = Some(id.clone());
-                let task = ctx2.rt.spawn(run_share(ctx2.clone(), grpc, id.clone(), key));
+                let task = ctx2.rt.spawn(run_share(ctx2.clone(), grpc, id.clone(), m.share));
                 s.rt(&id).task = Some(task.abort_handle());
             }
-            Err(e) => {
-                log::error!("MakeSecretKey failed: {e}");
+            Ok(m) => {
+                let (text, fix) = settings::make_share_error(m.error, &m.detail);
+                log::error!("MakeShare failed ({}): {}", m.error, m.detail);
                 s.creating = None;
-                s.banner = Some(format!("Couldn't create a link. {e}"));
+                s.creating_replaces = false;
+                s.banner = Some(Banner { text, settings: fix });
+                s.select_fallback();
+            }
+            Err(e) => {
+                log::error!("MakeShare failed: {e}");
+                s.creating = None;
+                s.creating_replaces = false;
+                s.banner = Some(Banner::plain(format!("Couldn't create a link. {e}")));
                 s.select_fallback();
             }
         }
@@ -986,17 +1077,47 @@ fn share_new(ctx: &Ctx, app: &AppWindow) {
     });
 }
 
+/// The share's error says its link no longer works (the device identity was
+/// reset).
+fn needs_new_link(s: &AppState, role: Role, id: &str) -> bool {
+    role == Role::Share
+        && s.runtime
+            .get(id)
+            .is_some_and(|r| r.status == Status::Error && r.error_action == ErrorAction::NewLink)
+}
+
+/// RETRY on an error, or — when the link no longer works — MAKE A NEW LINK.
+fn retry(ctx: &Ctx, role: Role, id: &str) {
+    let new_link = needs_new_link(&ctx.lock(), role, id);
+    if !new_link {
+        start(ctx, role, id);
+        return;
+    }
+    if let Some(f) = ctx.flyout.upgrade() {
+        f.window().hide().ok();
+    }
+    if let Some(app) = ctx.app.upgrade() {
+        show_main(&app);
+        make_link(ctx, &app, Some(id.to_string()));
+    }
+}
+
 fn cancel_new_share(ctx: &Ctx) {
     let mut s = ctx.lock();
     let Some(id) = s.creating.take() else { return };
+    let replaces = std::mem::take(&mut s.creating_replaces);
     if !id.is_empty() {
         drop(s);
         stop(ctx, Role::Share, &id);
         s = ctx.lock();
-        s.store.remove_shared(&id);
-        s.runtime.remove(&id);
-        if s.selected.as_ref().is_some_and(|(_, sel)| *sel == id) {
-            s.selected = None;
+        // A new link for an existing share keeps the entry (with the new
+        // link, now off); a new share goes away again.
+        if !replaces {
+            s.store.remove_shared(&id);
+            s.runtime.remove(&id);
+            if s.selected.as_ref().is_some_and(|(_, sel)| *sel == id) {
+                s.selected = None;
+            }
         }
     }
     s.select_fallback();
@@ -1112,16 +1233,18 @@ fn rename(ctx: &Ctx, role: Role, id: &str, label: &str) {
 
 // ── Demo seeding (SPORA_UI_DEMO) ─────────────────────────────────────
 
-fn seed_demo(s: &mut AppState, mode: &str) {
+fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
     s.demo = true;
     s.service_online = true;
     if mode == "empty" {
+        settings::seed_demo(s, app, mode);
         return;
     }
     let day = 86_400;
     let t = store::now();
     let mut share = |label: &str, status: Status, url: &str, created: i64, last: i64, err: Option<(&str, &str)>| {
-        let id = s.store.add_shared(label.into(), String::new());
+        // Any non-empty blob: a demo share never reaches the service.
+        let id = s.store.add_shared(label.into(), b"demo".to_vec(), String::new());
         s.store.set_share_url(&id, url);
         if let Some(c) = s.store.shared.iter_mut().find(|c| c.id == id) {
             c.created_at = created;
@@ -1173,7 +1296,7 @@ fn seed_demo(s: &mut AppState, mode: &str) {
         "banner" => {
             s.selected = Some((Role::Use, dana));
             s.pane = Pane::Detail;
-            s.banner = Some("Couldn't connect. Ask your friend for a new link.".into());
+            s.banner = Some(Banner::plain("Couldn't connect. Ask your friend for a new link."));
         }
         "error" => {
             // Nothing live, one failed share: the error is the headline
@@ -1186,11 +1309,23 @@ fn seed_demo(s: &mut AppState, mode: &str) {
             s.selected = Some((Role::Share, work));
             s.pane = Pane::Detail;
         }
+        "linklost" => {
+            // A share whose link no longer works: MAKE A NEW LINK.
+            for id in [&mom, &alesya, &dana] {
+                let rt = s.rt(id);
+                rt.status = Status::Inactive;
+                rt.started_at = None;
+            }
+            s.set_link_lost(&work, settings::LINK_RESET, "");
+            s.selected = Some((Role::Share, work));
+            s.pane = Pane::Detail;
+        }
         _ => {
             s.selected = Some((Role::Use, dana));
             s.pane = Pane::Detail;
         }
     }
+    settings::seed_demo(s, app, mode);
 }
 
 // ── main ─────────────────────────────────────────────────────────────
@@ -1258,12 +1393,14 @@ fn main() {
         selected: None,
         pane: Pane::Empty,
         creating: None,
+        creating_replaces: false,
         banner: None,
+        settings: settings::SettingsState::default(),
         service_online: false,
         demo: false,
     };
     match &demo_mode {
-        Some(mode) => seed_demo(&mut state, mode),
+        Some(mode) => seed_demo(&mut state, &app, mode),
         None => state.select_fallback(),
     }
 
@@ -1273,6 +1410,7 @@ fn main() {
         flyout: flyout.as_weak(),
         rt: rt.handle().clone(),
         client: Arc::new(Mutex::new(None)),
+        poke: Arc::new(tokio::sync::Notify::new()),
     };
 
     // ── Tray + toasts ────────────────────────────────────────────────
@@ -1352,9 +1490,10 @@ fn main() {
                 match GrpcClient::connect().await {
                     Ok(c) => {
                         *ctx2.client.lock().unwrap() = Some(c);
+                        tokio::spawn(settings::poll(ctx2.clone()));
                         let mut s = ctx2.lock();
                         s.service_online = true;
-                        if s.banner.as_deref().is_some_and(|b| b.starts_with("Can't reach the Spora service")) {
+                        if s.banner.as_ref().is_some_and(|b| b.text.starts_with("Can't reach the Spora service")) {
                             s.banner = None;
                         }
                         drop(s);
@@ -1365,7 +1504,7 @@ fn main() {
                         attempts += 1;
                         log::warn!("gRPC connect failed, retrying in 2s: {e}");
                         if attempts == 3 {
-                            ctx2.lock().banner = Some("Can't reach the Spora service. Retrying…".into());
+                            ctx2.lock().banner = Some(Banner::plain("Can't reach the Spora service. Retrying…"));
                             ctx2.refresh();
                         }
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1463,7 +1602,7 @@ fn main() {
         let ctx = ctx.clone();
         app.on_retry(move |role, id| {
             if let Some(role) = Role::parse(&role) {
-                start(&ctx, role, &id);
+                retry(&ctx, role, &id);
             }
         });
     }
@@ -1514,6 +1653,7 @@ fn main() {
         });
     }
     app.on_copy(move |text| copy_to_clipboard(&text));
+    settings::wire(&ctx, &app);
 
     // ── Window chrome (frameless: the caption and controls are ours) ──
     {
@@ -1568,7 +1708,7 @@ fn main() {
         let ctx = ctx.clone();
         flyout.on_retry(move |role, id| {
             if let Some(role) = Role::parse(&role) {
-                start(&ctx, role, &id);
+                retry(&ctx, role, &id);
             }
         });
     }

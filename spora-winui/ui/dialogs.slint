@@ -1,7 +1,7 @@
 // Centered content dialogs over a smoke layer (design canvas 1g).
 
 import { Theme } from "theme.slint";
-import { MicroLabel, BodyText, InputField, PrimaryButton, TextButton } from "components.slint";
+import { MicroLabel, BodyText, InputField, PrimaryButton, TextButton, MicroButton } from "components.slint";
 
 component Dialog inherits Rectangle {
     in property <length> card-width: 400px;
@@ -131,5 +131,139 @@ export component DeleteDialog inherits Dialog {
         spacing: 2px;
         PrimaryButton { text: "DELETE"; trailing-arrow: false; clicked => { root.confirm(); } }
         TextButton { text: "CANCEL"; clicked => { root.cancel(); } }
+    }
+}
+
+/// A dialog's headline under its micro-label.
+component DialogTitle inherits Text {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+    color: Theme.text-primary;
+    wrap: word-wrap;
+    height: self.preferred-height + 14px;
+    vertical-alignment: bottom;
+}
+
+/// Settings › Relays: add or edit one of the user's own relays. The token
+/// never comes back from the service, so editing a relay that has one shows
+/// that it is set and offers to remove it; typing a new one replaces it.
+export component RelayDialog inherits Dialog {
+    in property <bool> editing;
+    in property <bool> had-token;
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> endpoint;
+    in-out property <string> token;
+    in-out property <bool> clear-token;
+    callback save();
+    callback cancel();
+    card-width: 420px;
+    escape => { root.cancel(); }
+    enter => { root.save(); }
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => { root.focus-pending = false; endpoint-field.focus-input(); }
+    }
+
+    MicroLabel { text: root.editing ? "EDIT RELAY" : "ADD A RELAY"; height: 12px; }
+    VerticalLayout {
+        padding-top: 18px;
+        endpoint-field := InputField {
+            label: "RELAY ADDRESS";
+            name: "Relay address";
+            placeholder: "relay.example.org:443";
+            helper: "host:port. For a relay on another protocol, put nz/ or tcptls/ in front.";
+            error: root.error;
+            text <=> root.endpoint;
+            accepted => { root.save(); }
+        }
+    }
+    VerticalLayout {
+        padding-top: 20px;
+        InputField {
+            label: "TOKEN — OPTIONAL";
+            name: "Token";
+            password: true;
+            placeholder: root.had-token && !root.clear-token ? "Set — type to replace it" : "If the relay requires one";
+            helper: "It is sent to the relay and never goes into your links.";
+            text <=> root.token;
+            accepted => { root.save(); }
+        }
+    }
+    if root.had-token : HorizontalLayout {
+        padding-top: 6px;
+        alignment: start;
+        MicroButton {
+            text: root.clear-token ? "KEEP THE TOKEN" : "REMOVE THE TOKEN";
+            text-color: Theme.text-muted;
+            clicked => { root.clear-token = !root.clear-token; root.token = ""; }
+        }
+    }
+    VerticalLayout {
+        padding-top: 24px;
+        spacing: 2px;
+        PrimaryButton { text: "SAVE RELAY"; enabled: !root.busy; clicked => { root.save(); } }
+        TextButton { text: "CANCEL"; clicked => { root.cancel(); } }
+    }
+}
+
+export component RemoveRelayDialog inherits Dialog {
+    in property <string> endpoint;
+    callback confirm();
+    callback cancel();
+    escape => { root.cancel(); }
+    enter => { root.confirm(); }
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => { root.focus-pending = false; root.focus-keys(); }
+    }
+
+    MicroLabel { text: "REMOVE RELAY"; height: 12px; }
+    DialogTitle { text: "Remove «" + root.endpoint + "»?"; }
+    BodyText {
+        text: "Links you have already made keep using it. New links won't.";
+        height: self.preferred-height + 8px;
+        vertical-alignment: bottom;
+    }
+    VerticalLayout {
+        padding-top: 24px;
+        spacing: 2px;
+        PrimaryButton { text: "REMOVE"; trailing-arrow: false; clicked => { root.confirm(); } }
+        TextButton { text: "CANCEL"; clicked => { root.cancel(); } }
+    }
+}
+
+/// The account requires telemetry: switching it off was refused, or the
+/// requirement just arrived (shown once). The message is the agreed wording.
+export component RequiredDialog inherits Dialog {
+    in property <string> message;
+    callback keep();
+    callback contact();
+    escape => { root.keep(); }
+    enter => { root.keep(); }
+    property <bool> focus-pending: true;
+    Timer {
+        interval: 16ms;
+        running: root.focus-pending;
+        triggered => { root.focus-pending = false; root.focus-keys(); }
+    }
+
+    MicroLabel { text: "TELEMETRY REQUIRED"; height: 12px; }
+    DialogTitle { text: "Telemetry stays on"; }
+    BodyText {
+        text: root.message;
+        height: self.preferred-height + 8px;
+        vertical-alignment: bottom;
+    }
+    VerticalLayout {
+        padding-top: 24px;
+        spacing: 2px;
+        PrimaryButton { text: "KEEP ENABLED"; trailing-arrow: false; clicked => { root.keep(); } }
+        TextButton { text: "CONTACT SUPPORT"; clicked => { root.contact(); } }
     }
 }

@@ -89,6 +89,25 @@ export component StatusShape inherits Rectangle {
     }
 }
 
+/// A shape and a sentence that may wrap (settings status lines, errors under
+/// a control): the shape sits on the first line.
+export component StatusNote inherits HorizontalLayout {
+    in property <string> shape: "error";   // "active" | "pending" | "error"
+    in property <string> text;
+    spacing: 8px;
+    Rectangle {
+        width: 8px;
+        StatusShape { state: root.shape; y: 4px; }
+    }
+    Text {
+        text: root.text;
+        font-size: 12px;
+        color: root.shape == "error" ? Theme.error : root.shape == "pending" ? Theme.pending-text : Theme.success-text;
+        wrap: word-wrap;
+        horizontal-stretch: 1;
+    }
+}
+
 /// Tone → text color for status lines.
 export global Tone {
     pure public function color(tone: string) -> color {
@@ -122,6 +141,8 @@ export component TrashIcon inherits Icon { commands: "M5 7h14 M10 7V5h4v2 M7 7l0
 export component ArrowIcon inherits Icon { commands: "M5 12h14 M12 5l7 7-7 7"; }
 /// The hero card's −45° arrow, pre-rotated so no transform is needed.
 export component ArrowNEIcon inherits Icon { commands: "M6 18L18 6 M8 6h10v10"; }
+/// Settings: two sliders.
+export component SlidersIcon inherits Icon { commands: "M4 7h9 M17 7h3 M13 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0 M4 17h3 M11 17h9 M7 17a2 2 0 1 0 4 0a2 2 0 1 0 -4 0"; }
 export component ExternalIcon inherits Icon { commands: "M14 4h6v6 M20 4L11 13 M18 13v5.5A2.5 2.5 0 0 1 15.5 21H5.5A2.5 2.5 0 0 1 3 18.5V8.5A2.5 2.5 0 0 1 5.5 6H11"; }
 
 // ── Lockup: mark + typeset wordmark ──────────────────────────────────
@@ -370,6 +391,7 @@ export component InputField inherits VerticalLayout {
     in property <string> helper;
     in property <string> error;
     in property <string> name;   // accessible name
+    in property <bool> password: false;
     callback accepted();
     callback edited();
     public function focus-input() { input.focus(); }
@@ -388,6 +410,7 @@ export component InputField inherits VerticalLayout {
             color: Theme.text-primary;
             single-line: true;
             vertical-alignment: center;
+            input-type: root.password ? InputType.password : InputType.text;
             text <=> root.text;
             accessible-label: root.name != "" ? root.name : root.label;
             accepted => { root.accepted(); }
@@ -584,6 +607,7 @@ export component InfoRow inherits Rectangle {
     in property <string> value;
     in property <bool> divider: true;
     in property <bool> copyable: false;
+    in property <string> copy-label: "Copy link";
     callback copy();
     height: 42px;
     HorizontalLayout {
@@ -600,7 +624,7 @@ export component InfoRow inherits Rectangle {
                 border-radius: 4px;
                 background: copy-ta.has-hover ? Theme.hover : transparent;
                 accessible-role: button;
-                accessible-label: "Copy link";
+                accessible-label: root.copy-label;
                 accessible-action-default => { root.copy(); }
                 CopyIcon { size: 14px; weight: 1.4px; color: Theme.text-muted; x: 5px; y: (parent.height - self.height) / 2; }
                 copy-ta := TouchArea { mouse-cursor: pointer; clicked => { root.copy(); } }

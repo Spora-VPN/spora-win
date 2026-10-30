@@ -7,16 +7,39 @@ service Spora {
   rpc Connect (ConnectRequest) returns (stream ConnectEvent);
   rpc StopShare (StopShareRequest) returns (StopShareResponse);
   rpc Disconnect (DisconnectRequest) returns (DisconnectResponse);
-  rpc MakeSecretKey (MakeSecretKeyRequest) returns (MakeSecretKeyResponse);
+  // A new share of this device on the relays the settings name. Offline,
+  // except when Spora's relays are wanted and none have been fetched yet.
+  rpc MakeShare (MakeShareRequest) returns (MakeShareResponse);
+
+  // The relays new shares are made with (machine-wide, kept by the
+  // service), and the device's access to Spora's relays.
+  rpc GetRelaySettings (GetRelaySettingsRequest) returns (RelaySettings);
+  rpc SetSporaRelays (SetSporaRelaysRequest) returns (RelaySettings);
+  rpc PutOwnRelay (PutOwnRelayRequest) returns (PutOwnRelayResponse);
+  rpc RemoveOwnRelay (RemoveOwnRelayRequest) returns (RelaySettings);
+  // Fetch Spora's relays and a relay token now (network).
+  rpc RefreshRelays (RefreshRelaysRequest) returns (RelaySettings);
+
+  // The telemetry upload switch (per device, off by default; collection is
+  // always on and local).
+  rpc GetTelemetry (GetTelemetryRequest) returns (TelemetryStatus);
+  rpc SetTelemetry (SetTelemetryRequest) returns (SetTelemetryResponse);
+  rpc AcknowledgeTelemetryNotice (AcknowledgeTelemetryNoticeRequest) returns (TelemetryStatus);
+  // A bug-report zip (records, diagnostic log, crash files of the last
+  // days), streamed in chunks for the UI to save where the user can reach it.
+  rpc ExportBugReport (ExportBugReportRequest) returns (stream BugReportChunk);
+
   rpc Shutdown (ShutdownRequest) returns (ShutdownResponse);
 }
 
 // --- Share ---
 
 message ShareRequest {
-  string key = 1;
+  // The share to serve: the blob MakeShare returned (spora-core's
+  // Share::to_blob). It must have been made under this device's identity.
+  bytes share = 1;
   // Connection-log control. Logging is ENABLED by default; when these fields
-  // are unset the log lands at %PROGRAMDATA%\Spora\connlog\<routing_key_hex>\.
+  // are unset the log lands at %PROGRAMDATA%\Spora\connlog\<routing_hash_hex>\.
   bool disable_conn_log = 2;
   // Override the log directory (used as-is). Empty = the default above.
   string conn_log_dir = 3;
@@ -44,8 +67,20 @@ message ShareReady {
 
 message ShareConnected {}
 
+enum ShareErrorCode {
+  SHARE_ERROR_CODE_UNSPECIFIED = 0;
+  // The share was made under another device identity: the service state
+  // was lost and the device minted a new one. Offer to make a new share.
+  SHARE_ERROR_CODE_IDENTITY_MISMATCH = 1;
+  // Not a share blob this build reads.
+  SHARE_ERROR_CODE_INVALID_SHARE = 2;
+  // The service state (device identity) could not be opened.
+  SHARE_ERROR_CODE_SERVICE_UNAVAILABLE = 3;
+}
+
 message ShareError {
   string message = 1;
+  ShareErrorCode code = 2;
 }
 
 // The active peer session ended (replaced by a new peer, cancelled, or its
@@ -59,6 +94,167 @@ message ShareSessionEnded {
 message ShareConnLogDegraded {
   string detail = 1;
 }
+
+// --- MakeShare ---
+
+message MakeShareRequest {}
+
+enum MakeShareError {
+  MAKE_SHARE_ERROR_OK = 0;
+  // Spora's relays are off and there are no own relays.
+  MAKE_SHARE_ERROR_NO_RELAYS = 1;
+  // Spora's relays are wanted, none were fetched yet, and the API could
+  // not be reached.
+  MAKE_SHARE_ERROR_RELAYS_UNREACHABLE = 2;
+  // The API answered with no relays for this device.
+  MAKE_SHARE_ERROR_NO_SPORA_RELAYS = 3;
+  // The service state (device identity) could not be opened.
+  MAKE_SHARE_ERROR_SERVICE_UNAVAILABLE = 4;
+  MAKE_SHARE_ERROR_FAILED = 5;
+}
+
+message MakeShareResponse {
+  // The share blob (holds the share's secret: the UI keeps it private).
+  bytes share = 1;
+  // Its URL: a pure function of the share, the same for as long as it exists.
+  string url = 2;
+  MakeShareError error = 3;
+  // The underlying message when error != OK.
+  string detail = 4;
+}
+
+// --- Relays ---
+
+message GetRelaySettingsRequest {}
+
+message RelaySettings {
+  // New shares go on Spora's relays (first) — on by default.
+  bool use_spora = 1;
+  // The user's own relays, in the order new shares list them.
+  repeated OwnRelay own = 2;
+  RelayAccess access = 3;
+}
+
+message OwnRelay {
+  // In the share URL's ?r= form: host:port, nz/host:port, tcptls/host:port.
+  string endpoint = 1;
+  // A token is set (it never leaves the service).
+  bool has_token = 2;
+}
+
+// The device's access to Spora's relays, as the service keeps it.
+message RelayAccess {
+  // The service state opened; false = everything below is unknown.
+  bool available = 1;
+  // The device's cert hash (hex).
+  string cert_hash = 2;
+  // When the cached relay token expires; 0 = no token.
+  uint64 token_expires_unix_ms = 3;
+  // The last time the API answered; 0 = never.
+  uint64 last_success_unix_ms = 4;
+  // The last failure, if it came after the last success.
+  string last_error = 5;
+  // The relays a new share on Spora's relays gets, in ?r= form.
+  repeated string advised = 6;
+  // An explicit fetch (RefreshRelays, MakeShare) is under way.
+  bool fetching = 7;
+  // The last explicit fetch failed.
+  bool fetch_failed = 8;
+}
+
+message SetSporaRelaysRequest {
+  bool use_spora = 1;
+}
+
+enum TokenAction {
+  // Keep the relay's token as it is (none for a new relay).
+  TOKEN_ACTION_KEEP = 0;
+  TOKEN_ACTION_SET = 1;
+  TOKEN_ACTION_CLEAR = 2;
+}
+
+message PutOwnRelayRequest {
+  // The endpoint of the relay to replace; empty = add a new one.
+  string original = 1;
+  // As typed (trimmed and percent-decoded by the service).
+  string endpoint = 2;
+  TokenAction token_action = 3;
+  // With TOKEN_ACTION_SET: the token as the relay wants it (UTF-8).
+  string token = 4;
+}
+
+enum RelayAddressError {
+  RELAY_ADDRESS_ERROR_OK = 0;
+  RELAY_ADDRESS_ERROR_FORMAT = 1;
+  RELAY_ADDRESS_ERROR_PROTOCOL = 2;
+  RELAY_ADDRESS_ERROR_IPV6_BRACKETS = 3;
+  RELAY_ADDRESS_ERROR_PORT = 4;
+  RELAY_ADDRESS_ERROR_DUPLICATE = 5;
+  // `original` names no relay (another client removed it).
+  RELAY_ADDRESS_ERROR_GONE = 6;
+}
+
+message PutOwnRelayResponse {
+  RelaySettings settings = 1;
+  RelayAddressError error = 2;
+}
+
+message RemoveOwnRelayRequest {
+  string endpoint = 1;
+}
+
+message RefreshRelaysRequest {}
+
+// --- Telemetry ---
+
+message GetTelemetryRequest {}
+
+message TelemetryStatus {
+  // The service state opened; false = everything below is unknown.
+  bool available = 1;
+  bool upload_enabled = 2;
+  // The account requires telemetry (last known).
+  bool required = 3;
+  // The UI owes the user the force notice: show it once, then acknowledge.
+  bool required_notice_pending = 4;
+  // The registered device, for support; empty until registered.
+  string device_id = 5;
+  // 0 = never.
+  uint64 last_upload_unix_ms = 6;
+  string last_error = 7;
+  // The agreed wording of the force notice.
+  string required_notice = 8;
+}
+
+message SetTelemetryRequest {
+  bool enabled = 1;
+}
+
+message SetTelemetryResponse {
+  TelemetryStatus status = 1;
+  // Switching off was refused: the account requires telemetry.
+  bool refused_required = 2;
+  // Any other failure to change it.
+  string error = 3;
+}
+
+message AcknowledgeTelemetryNoticeRequest {}
+
+message ExportBugReportRequest {
+  string note = 1;
+}
+
+message BugReportChunk {
+  bytes data = 1;
+}
+
+// --- StopShare ---
+
+message StopShareRequest {
+  int32 handle = 1;
+}
+
+message StopShareResponse {}
 
 // --- Connect ---
 
@@ -86,14 +282,6 @@ message ConnectError {
   string message = 1;
 }
 
-// --- StopShare ---
-
-message StopShareRequest {
-  int32 handle = 1;
-}
-
-message StopShareResponse {}
-
 // --- Disconnect ---
 
 message DisconnectRequest {
@@ -101,14 +289,6 @@ message DisconnectRequest {
 }
 
 message DisconnectResponse {}
-
-// --- MakeSecretKey ---
-
-message MakeSecretKeyRequest {}
-
-message MakeSecretKeyResponse {
-  string key = 1;
-}
 
 // --- Shutdown ---
 

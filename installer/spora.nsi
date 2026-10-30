@@ -67,11 +67,11 @@ Section "Spora (required)" SecMain
     nsExec::ExecToLog 'taskkill.exe /F /IM spora-winui.exe'
     Pop $0
 
-    ; If a previous service-era install exists, this is an upgrade. Clear its
-    ; restart-on-failure actions FIRST so the taskkill fallback below can't
-    ; trip an SCM auto-restart mid-extraction, then stop it and wait for it to
-    ; actually report STOPPED before we overwrite its files. (Old helper-era
-    ; installs had no service; sc query returns 1060 and we skip this.)
+    ; If the service exists, this is an upgrade. Clear its restart-on-failure
+    ; actions FIRST so the taskkill fallback below can't trip an SCM
+    ; auto-restart mid-extraction, then stop it and wait for it to actually
+    ; report STOPPED before we overwrite its files. (On a fresh install sc
+    ; query returns 1060 and we skip this.)
     nsExec::ExecToLog 'sc.exe query Spora'
     Pop $0
     ${If} $0 == 0
@@ -96,8 +96,8 @@ Section "Spora (required)" SecMain
         wincore_stopped:
     ${EndIf}
 
-    ; Belt-and-suspenders: kill any lingering wincore (a helper-era process,
-    ; or a service that didn't stop within the wait) so its exe/dll aren't
+    ; Belt-and-suspenders: kill any lingering wincore (a service that didn't
+    ; stop within the wait, or a console-mode one) so its exe/dll aren't
     ; locked when we extract.
     nsExec::ExecToLog 'taskkill.exe /F /IM spora-wincore.exe'
     Pop $0

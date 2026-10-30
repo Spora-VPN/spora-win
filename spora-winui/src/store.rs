@@ -1,5 +1,8 @@
 //! Saved connections, persisted as JSON under the user's config directory.
-//! Older files (without the timestamp/url fields) load with defaults.
+//!
+//! A share is the core's: an opaque blob (share id, secret, its relays) made
+//! by the service under the device's identity, its URL a pure function of
+//! it. The file keeps it base64.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -9,16 +12,15 @@ use std::path::PathBuf;
 pub struct SharedConnection {
     pub id: String,
     pub label: String,
-    pub secret_key: String,
-    /// The share link, cached once the service reported it, so the detail
-    /// pane can show and copy it while the share is off.
-    #[serde(default)]
+    /// The share blob (spora-core's `Share::to_blob`).
+    #[serde(with = "base64_bytes")]
+    pub share: Vec<u8>,
+    /// The share link, a pure function of the blob, kept so the detail pane
+    /// can show and copy it while the share is off.
     pub url: String,
-    /// Unix seconds; 0 = unknown (pre-existing entries).
-    #[serde(default)]
+    /// Unix seconds.
     pub created_at: i64,
     /// Unix seconds of the last session start/stop or peer event; 0 = never.
-    #[serde(default)]
     pub last_activity: i64,
 }
 
@@ -27,9 +29,7 @@ pub struct UseConnection {
     pub id: String,
     pub label: String,
     pub url: String,
-    #[serde(default)]
     pub created_at: i64,
-    #[serde(default)]
     pub last_activity: i64,
 }
 
@@ -61,7 +61,8 @@ impl Store {
                 Ok(store) => store,
                 Err(e) => {
                     // Never let a corrupt file be silently replaced by an
-                    // empty one: the share keys in it are irreplaceable.
+                    // empty one: the shares in it cannot be made again (a new
+                    // share is a new link).
                     let bak = path.with_extension("json.bak");
                     log::error!("connections file unreadable ({e}); keeping it as {}", bak.display());
                     let _ = fs::rename(&path, &bak);
@@ -103,18 +104,28 @@ impl Store {
         }
     }
 
-    pub fn add_shared(&mut self, label: String, secret_key: String) -> String {
+    pub fn add_shared(&mut self, label: String, share: Vec<u8>, url: String) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.shared.push(SharedConnection {
             id: id.clone(),
             label,
-            secret_key,
-            url: String::new(),
+            share,
+            url,
             created_at: now(),
             last_activity: 0,
         });
         self.save();
         id
+    }
+
+    /// Give a share a new link (a new share blob), keeping its id and name.
+    pub fn replace_share(&mut self, id: &str, share: Vec<u8>, url: String) {
+        if let Some(c) = self.shared.iter_mut().find(|c| c.id == id) {
+            c.share = share;
+            c.url = url;
+            c.created_at = now();
+            self.save();
+        }
     }
 
     pub fn add_use(&mut self, label: String, url: String) -> String {
@@ -193,5 +204,42 @@ impl Store {
             }
             n += 1;
         }
+    }
+}
+
+mod base64_bytes {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as _};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(d)?;
+        STANDARD.decode(text).map_err(D::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_share_blob_round_trips_as_base64() {
+        let mut store = Store::default();
+        store.shared.push(SharedConnection {
+            id: "a".into(),
+            label: "Mom".into(),
+            share: b"sSHR\x01\xffabc".to_vec(),
+            url: "https://spora.to/s/x".into(),
+            created_at: 1,
+            last_activity: 0,
+        });
+        let written = serde_json::to_string(&store).unwrap();
+        assert!(written.contains(r#""share":"c1NIUgH/YWJj""#), "{written}");
+        let read: Store = serde_json::from_str(&written).unwrap();
+        assert_eq!(read.shared[0].share, b"sSHR\x01\xffabc");
     }
 }

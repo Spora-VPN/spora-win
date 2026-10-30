@@ -86,6 +86,7 @@ export struct ConnectionItem {
     link: string,          // the link as shown: "spora.to/s/…" (no scheme)
     status: string,        // "inactive" | "starting" | "sharing" | "connecting" | "connected" | "error"
     error: string,         // friendly sentence when status == "error"
+    error-action: string,  // what the error offers: "retry" | "new-link" (the link no longer works)
     error-detail: string,  // the underlying message, for the curious
     created: string,       // "12 June 2026" or ""
     last-activity: string, // "today, 14:07" or ""
@@ -97,4 +98,10 @@ export struct StatusLine {
     text: string,          // window form, already uppercase, with the ↑/↓ arrow
     short: string,         // flyout-header form (no names: the rows carry them)
     tone: string,          // "success" | "pending" | "error" | "muted"
+}
+
+/// One of the user's own relays (Settings › Relays).
+export struct OwnRelayItem {
+    endpoint: string,      // ?r= form: host:port, nz/host:port, tcptls/host:port
+    has-token: bool,
 }

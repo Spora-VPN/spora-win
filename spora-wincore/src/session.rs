@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
+use spora_core::identity::{Credentials, ShareId};
 use tokio_util::sync::CancellationToken;
 
 static NEXT_HANDLE: AtomicI32 = AtomicI32::new(1);
@@ -9,6 +10,11 @@ static NEXT_HANDLE: AtomicI32 = AtomicI32::new(1);
 pub struct ShareSession {
     pub cancel: CancellationToken,
     pub task: JoinHandle<()>,
+    pub share_id: ShareId,
+    /// What the share's registrars present: renewed relay tokens go here.
+    pub credentials: Credentials,
+    /// Some of its relays are Spora's (they want the device's relay token).
+    pub uses_spora: bool,
 }
 
 #[allow(dead_code)]
@@ -48,19 +54,31 @@ impl SessionStore {
 
     /// Registers a share session, returning its handle. Returns `None` if the
     /// store is shutting down; the caller must then tear the session down
-    /// itself (see the RPC handlers).
+    /// itself (see the RPC handlers). From here on the share gets every
+    /// relay token the service renews.
     pub fn insert_share(&self, session: ShareSession) -> Option<i32> {
         let mut inner = self.inner.lock().unwrap();
         if inner.closed {
             return None;
         }
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
+        if let Some(t) = spora_service::Telemetry::global() {
+            t.register_share(session.share_id, session.credentials.clone());
+        }
         inner.shares.insert(handle, session);
         Some(handle)
     }
 
     pub fn remove_share(&self, handle: i32) -> Option<ShareSession> {
-        self.inner.lock().unwrap().shares.remove(&handle)
+        let mut inner = self.inner.lock().unwrap();
+        let session = inner.shares.remove(&handle)?;
+        unregister(&inner, &session);
+        Some(session)
+    }
+
+    /// Some running share is on Spora's relays.
+    pub fn any_share_uses_spora(&self) -> bool {
+        self.inner.lock().unwrap().shares.values().any(|s| s.uses_spora)
     }
 
     /// See [`insert_share`]. `None` means shutting down.
@@ -95,11 +113,28 @@ impl SessionStore {
         for (_, s) in &shares {
             s.cancel.cancel();
             s.task.abort();
+            if let Some(t) = spora_service::Telemetry::global() {
+                t.unregister_share(&s.share_id);
+            }
         }
         for (_, s) in &connects {
             s.cancel.cancel();
             s.task.abort();
         }
         // `shares`/`connects` drop here (outside the lock), running route cleanup.
+    }
+}
+
+/// A share session left the store: it no longer gets renewed tokens. The
+/// service keys shares by share id, so if another instance of the same share
+/// is still in the store (a quick off→on, the old one still going away), it
+/// is registered again rather than left without renewals.
+fn unregister(inner: &Inner, gone: &ShareSession) {
+    let Some(t) = spora_service::Telemetry::global() else {
+        return;
+    };
+    t.unregister_share(&gone.share_id);
+    if let Some(other) = inner.shares.values().find(|s| s.share_id == gone.share_id) {
+        t.register_share(other.share_id, other.credentials.clone());
     }
 }

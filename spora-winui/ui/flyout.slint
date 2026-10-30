@@ -51,7 +51,7 @@ component FlyoutRow inherits Rectangle {
                 if error : HorizontalLayout {
                     alignment: start;
                     padding-top: 3px;
-                    MicroButton { text: "RETRY →"; clicked => { root.retry(); } }
+                    MicroButton { text: item.error-action == "new-link" ? "MAKE A NEW LINK →" : "RETRY →"; clicked => { root.retry(); } }
                 }
             }
         }

@@ -1,0 +1,393 @@
+// Settings, in the detail pane (opened from the sidebar's foot): two
+// sections, each its own tab — Relays (the relays new links are made with:
+// Spora's and the user's own) and Telemetry (the upload switch, what it
+// sends and why, and a diagnostic report to send by hand). Built in the
+// window's own vocabulary: breadcrumb, a title-sized tab strip, cards.
+
+import { Theme, OwnRelayItem } from "theme.slint";
+import { MicroLabel, BodyText, BodySmText, DataText, SporaToggle, MicroButton, Card, InfoRow,
+         StatusNote, PlusIcon, TrashIcon } from "components.slint";
+
+component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+    width: label.preferred-width + 2px;
+    height: 38px;
+    accessible-role: tab;
+    accessible-label: text;
+    accessible-action-default => { root.clicked(); }
+    label := Text {
+        y: 0;
+        height: parent.height - 4px;
+        text: root.text;
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+        color: root.selected ? Theme.text-primary : ta.has-hover ? Theme.text-primary.with-alpha(70%) : Theme.text-muted.with-alpha(75%);
+        vertical-alignment: center;
+    }
+    if root.selected : Rectangle {
+        y: parent.height - 2px;
+        height: 2px;
+        background: Theme.text-primary;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+component SectionLabel inherits VerticalLayout {
+    in property <string> text;
+    padding-top: 26px;
+    MicroLabel { text: root.text; height: 12px; }
+}
+
+/// A toggle card row: the switch, a title and an optional hint.
+component ToggleRow inherits HorizontalLayout {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    in property <string> title;
+    in property <string> hint;
+    callback toggled(bool);
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 14px;
+    padding-bottom: 14px;
+    spacing: 14px;
+    alignment: start;
+    Rectangle {
+        width: 40px;
+        SporaToggle {
+            on: root.on;
+            enabled: root.enabled;
+            label: root.title;
+            y: (parent.height - self.height) / 2;
+            toggled(v) => { root.toggled(v); }
+        }
+    }
+    VerticalLayout {
+        spacing: 2px;
+        alignment: center;
+        horizontal-stretch: 1;
+        Text { text: root.title; font-size: 13.5px; font-weight: 600; color: Theme.text-primary; }
+        if root.hint != "" : BodySmText { text: root.hint; }
+    }
+}
+
+component RelayRow inherits Rectangle {
+    in property <OwnRelayItem> relay;
+    in property <bool> divider: true;
+    callback edit();
+    callback remove();
+    height: 44px;
+    accessible-role: list-item;
+    accessible-label: relay.endpoint;
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 8px;
+        spacing: 10px;
+        DataText {
+            text: root.relay.endpoint;
+            font-size: 12px;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        MicroLabel {
+            text: root.relay.has-token ? "TOKEN SET" : "NO TOKEN";
+            color: root.relay.has-token ? Theme.text-primary : Theme.text-muted;
+        }
+        Rectangle {
+            width: 52px;
+            MicroButton { text: "EDIT"; y: (parent.height - self.height) / 2; clicked => { root.edit(); } }
+        }
+        Rectangle {
+            width: 28px;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 28px;
+                height: 28px;
+                border-radius: 6px;
+                background: remove-ta.has-hover ? Theme.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Remove relay " + root.relay.endpoint;
+                accessible-action-default => { root.remove(); }
+                TrashIcon { size: 15px; weight: 1.4px; color: Theme.text-muted; x: 6.5px; y: 6.5px; }
+                remove-ta := TouchArea { mouse-cursor: pointer; clicked => { root.remove(); } }
+            }
+        }
+    }
+    if root.divider : Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.border-divider;
+    }
+}
+
+component AddRelayRow inherits Rectangle {
+    callback clicked();
+    height: 42px;
+    border-radius: Theme.radius-card;
+    background: ta.has-hover ? Theme.hover : transparent;
+    accessible-role: button;
+    accessible-label: "Add a relay";
+    accessible-action-default => { root.clicked(); }
+    HorizontalLayout {
+        padding-left: 16px;
+        spacing: 9px;
+        alignment: start;
+        Rectangle { width: 14px; PlusIcon { size: 14px; weight: 1.6px; y: (parent.height - self.height) / 2; } }
+        Text { text: "Add a relay"; font-size: 12.5px; font-weight: 500; color: Theme.text-primary; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component RelaysPage inherits VerticalLayout {
+    in property <bool> use-spora;
+    in property <bool> available;
+    in property <string> spora-shape;
+    in property <string> spora-text;
+    in property <[OwnRelayItem]> own;
+    callback set-use-spora(bool);
+    callback add-relay();
+    callback edit-relay(OwnRelayItem);
+    callback remove-relay(string);
+    alignment: start;
+    spacing: 0;
+
+    BodyText {
+        text: "Every link needs at least one relay: it is how the people you share with first reach this PC. Once they are connected, Spora tries to switch to a direct path.";
+    }
+    VerticalLayout {
+        padding-top: 18px;
+        Card {
+            VerticalLayout {
+                ToggleRow {
+                    on: root.use-spora;
+                    title: "Use Spora's relays";
+                    hint: "Spora runs them for free. What passes through them stays encrypted end to end; they see the addresses involved and how much data moves. To use them, this PC registers with Spora.";
+                    toggled(v) => { root.set-use-spora(v); }
+                }
+                if root.use-spora && root.spora-text != "" : VerticalLayout {
+                    padding-left: 70px;
+                    padding-right: 16px;
+                    padding-bottom: 14px;
+                    StatusNote { shape: root.spora-shape; text: root.spora-text; }
+                }
+            }
+        }
+    }
+
+    SectionLabel { text: "YOUR OWN RELAYS"; }
+    VerticalLayout {
+        padding-top: 6px;
+        BodySmText { text: "Relays you run yourself, or someone you trust runs. They work alongside Spora's, or on their own."; }
+    }
+    VerticalLayout {
+        padding-top: 12px;
+        Card {
+            VerticalLayout {
+                for r[i] in root.own : RelayRow {
+                    relay: r;
+                    edit => { root.edit-relay(r); }
+                    remove => { root.remove-relay(r.endpoint); }
+                }
+                AddRelayRow { clicked => { root.add-relay(); } }
+            }
+        }
+    }
+    if !root.use-spora && root.own.length == 0 : VerticalLayout {
+        padding-top: 10px;
+        StatusNote { shape: "error"; text: "With no relays, new links can't be made."; }
+    }
+    VerticalLayout {
+        padding-top: 18px;
+        BodySmText {
+            text: "Relays are part of each link. These settings apply to the links you make from now on; links you already have keep their relays.";
+        }
+    }
+}
+
+component TelemetryPage inherits VerticalLayout {
+    in property <bool> available;
+    in property <bool> on;
+    in property <bool> busy;
+    in property <string> status-shape;
+    in property <string> status-text;
+    in property <string> device-id;
+    in property <string> last-upload;
+    in property <string> report-state;   // "" | "busy" | "saved" | "error"
+    in property <string> report-text;
+    callback set-on(bool);
+    callback copy(string);
+    callback save-report();
+    callback show-report();
+    alignment: start;
+    spacing: 0;
+
+    BodyText {
+        text: "Spora keeps a record of each connection, an app log and crash reports on this PC. With telemetry on, they are sent to us automatically. They contain network addresses: yours as the internet sees it, and those of the devices and servers Spora connects with. We also see the address each upload comes from.";
+    }
+    VerticalLayout {
+        padding-top: 8px;
+        BodyText { text: "They show us where and how networks block Spora, and help us fix problems."; }
+    }
+    VerticalLayout {
+        padding-top: 8px;
+        BodyText {
+            text: "With telemetry off, nothing is uploaded. Once it has been on, Spora still checks with us about once a day whether your account requires it, and if it does, turns it back on and tells you. This setting is for the whole PC.";
+        }
+    }
+    VerticalLayout {
+        padding-top: 18px;
+        // The layout in between gives the card its height (a component that
+        // inherits a layout does not size the Rectangle it sits in).
+        Card {
+            VerticalLayout {
+                ToggleRow {
+                    on: root.on;
+                    enabled: root.available && !root.busy;
+                    title: "Send telemetry automatically";
+                    toggled(v) => { root.set-on(v); }
+                }
+            }
+        }
+    }
+    if root.status-text != "" : VerticalLayout {
+        padding-top: 10px;
+        StatusNote { shape: root.status-shape; text: root.status-text; }
+    }
+    if root.device-id != "" || root.last-upload != "" : VerticalLayout {
+        padding-top: 18px;
+        spacing: 6px;
+        Card {
+            VerticalLayout {
+                if root.device-id != "" : InfoRow {
+                    label: "DEVICE ID";
+                    value: root.device-id;
+                    copyable: true;
+                    copy-label: "Copy device ID";
+                    divider: root.last-upload != "";
+                    copy => { root.copy(root.device-id); }
+                }
+                if root.last-upload != "" : InfoRow { label: "LAST UPLOAD"; value: root.last-upload; divider: false; }
+            }
+        }
+        if root.device-id != "" : BodySmText { text: "Mention the device ID when you contact support."; }
+    }
+
+    SectionLabel { text: "DIAGNOSTIC REPORT"; }
+    VerticalLayout {
+        padding-top: 6px;
+        BodySmText {
+            text: "The connection records, app log and crash reports of the last few days, in one file for you to send to support@spora.to. Saving it sends nothing.";
+        }
+    }
+    HorizontalLayout {
+        padding-top: 8px;
+        spacing: 4px;
+        alignment: start;
+        MicroButton {
+            text: root.report-state == "busy" ? "SAVING…" : "SAVE REPORT →";
+            enabled: root.report-state != "busy";
+            clicked => { root.save-report(); }
+        }
+        if root.report-state == "saved" : MicroButton { text: "SHOW IN FOLDER"; text-color: Theme.text-muted; clicked => { root.show-report(); } }
+    }
+    if root.report-text != "" : VerticalLayout {
+        padding-top: 4px;
+        StatusNote { shape: root.report-state == "error" ? "error" : "active"; text: root.report-text; }
+    }
+}
+
+export component SettingsPane inherits VerticalLayout {
+    in-out property <string> tab: "relays";   // "relays" | "telemetry"
+    // Relays
+    in property <bool> use-spora;
+    in property <bool> relays-available;
+    in property <string> spora-shape;
+    in property <string> spora-text;
+    in property <[OwnRelayItem]> own-relays;
+    // Telemetry
+    in property <bool> telemetry-available;
+    in property <bool> telemetry-on;
+    in property <bool> telemetry-busy;
+    in property <string> telemetry-shape;
+    in property <string> telemetry-text;
+    in property <string> device-id;
+    in property <string> last-upload;
+    in property <string> report-state;
+    in property <string> report-text;
+
+    callback tab-changed(string);
+    callback set-use-spora(bool);
+    callback add-relay();
+    callback edit-relay(OwnRelayItem);
+    callback remove-relay(string);
+    callback set-telemetry(bool);
+    callback copy(string);
+    callback save-report();
+    callback show-report();
+
+    spacing: 0;
+
+    VerticalLayout {
+        padding-left: 30px;
+        padding-right: 30px;
+        padding-top: 20px;
+        spacing: 0;
+        MicroLabel {
+            text: "SETTINGS / " + (root.tab == "relays" ? "RELAYS" : "TELEMETRY");
+            height: 14px;
+        }
+        HorizontalLayout {
+            padding-top: 14px;
+            spacing: 24px;
+            alignment: start;
+            Tab { text: "Relays"; selected: root.tab == "relays"; clicked => { root.tab = "relays"; root.tab-changed("relays"); } }
+            Tab { text: "Telemetry"; selected: root.tab == "telemetry"; clicked => { root.tab = "telemetry"; root.tab-changed("telemetry"); } }
+        }
+        Rectangle { height: 1px; background: Theme.border-divider; }
+    }
+
+    flick := Flickable {
+        vertical-stretch: 1;
+        viewport-width: self.width;
+        viewport-height: max(self.height, content.preferred-height);
+        content := VerticalLayout {
+            width: flick.width;
+            padding-left: 30px;
+            padding-right: 30px;
+            padding-top: 20px;
+            padding-bottom: 26px;
+            alignment: start;
+            if root.tab == "relays" : RelaysPage {
+                use-spora: root.use-spora;
+                available: root.relays-available;
+                spora-shape: root.spora-shape;
+                spora-text: root.spora-text;
+                own: root.own-relays;
+                set-use-spora(v) => { root.set-use-spora(v); }
+                add-relay => { root.add-relay(); }
+                edit-relay(r) => { root.edit-relay(r); }
+                remove-relay(e) => { root.remove-relay(e); }
+            }
+            if root.tab == "telemetry" : TelemetryPage {
+                available: root.telemetry-available;
+                on: root.telemetry-on;
+                busy: root.telemetry-busy;
+                status-shape: root.telemetry-shape;
+                status-text: root.telemetry-text;
+                device-id: root.device-id;
+                last-upload: root.last-upload;
+                report-state: root.report-state;
+                report-text: root.report-text;
+                set-on(v) => { root.set-telemetry(v); }
+                copy(t) => { root.copy(t); }
+                save-report => { root.save-report(); }
+                show-report => { root.show-report(); }
+            }
+        }
+    }
+}
