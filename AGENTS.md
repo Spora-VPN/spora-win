@@ -20,10 +20,12 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
   when the client drops the stream, the session (and its routes) is torn
   down. It links the core's `spora-service` like the CLI does: the device
   identity, Spora-managed relays, the diagnostic log, connection records,
-  telemetry and bug reports (see "Relays, shares and telemetry" below).
-  Connection log lives under `%PROGRAMDATA%\Spora\connlog\<routing hash>`
+  telemetry and bug reports, all of it per Windows user, one user served at
+  a time (see "Relays, shares and telemetry" below). Each user's connection
+  logs live under `%PROGRAMDATA%\Spora\users\<SID>\connlog\<routing hash>`
   (proto fields control it); human-readable service log at
-  `%PROGRAMDATA%\Spora\spora-wincore.log`.
+  `%PROGRAMDATA%\Spora\spora-wincore.log`. All of `%PROGRAMDATA%\Spora` is
+  SYSTEM and Administrators only.
 - **spora-winui** — Slint desktop UI. Pure gRPC client of wincore — no
   dependency on spora-core; its `build.rs` compiles
   `../spora-wincore/proto/spora.proto`. Runs unelevated; connects to the
@@ -60,11 +62,28 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
 ## Relays, shares and telemetry
 
 The core's `spora-service` holds the device identity (one key pair per
-machine), the access to Spora's relays and the telemetry switch; wincore
-links it (`src/backend.rs`) and the UI reaches it over gRPC. Core docs: `../spora/AGENTS.md`
+Windows user: each user is a device of their own), the access to Spora's
+relays and the telemetry switch; wincore links it (`src/backend.rs`) and the
+UI reaches it over gRPC. Core docs: `../spora/AGENTS.md`
 ("Identity, shares, persistence", "Relay access", "Diagnostic log and
 telemetry"). The Android client (`../spora-android`) is the reference UI.
 
+- **One Windows user at a time** (`src/users.rs`). Each pipe connection is
+  tagged with the Windows user on its other end (`src/pipe.rs`: the client
+  process's token user, as a SID); on Linux dev builds every caller is the
+  one user `local`. Every RPC goes through `Users::enter` first: the first
+  user to call is served, with their own `Backend` (a `Telemetry` instance
+  opened on `users\<SID>\service`, their relay settings, records and
+  connection logs), until their last connection closes. Calls from anyone
+  else meanwhile fail with `PERMISSION_DENIED` and `users::IN_USE`, which
+  the UI shows as its banner (the settings poll asks again every 10 s).
+  Letting a user go waits for their sessions to end (they end with their
+  streams), makes one last upload pass and closes their state; the
+  diagnostic log file moves with the user served
+  (`spora_service::diag::switch_file`), and there is none while nobody is,
+  so one user's uploads and reports never carry another's activity. The UI
+  holds its connection while it runs (in the tray too): a user is served
+  until they quit Spora or sign out.
 - **Shares are blobs.** `MakeShare` makes one on the relays the settings
   name (Spora's advised relays first, then the user's own) and returns it
   with its URL, a pure function of it; the UI stores it base64 in
@@ -73,8 +92,8 @@ telemetry"). The Android client (`../spora-android`) is the reference UI.
   under another device identity (the service state was lost) fails with
   `SHARE_ERROR_CODE_IDENTITY_MISMATCH`; the UI then offers MAKE A NEW LINK
   (a new share under the same entry and name, through the handoff pane).
-- **Relay settings are the service's, machine-wide** (`src/relays.rs`,
-  `%ProgramData%\Spora\service\relays.json`): Spora's relays on/off (on by
+- **Relay settings are the user's** (`src/relays.rs`,
+  `users\<SID>\service\relays.json`): Spora's relays on/off (on by
   default) and own relays (`?r=` form, checked by `relays::parse` with a
   reason per error; an optional token sent as a static credential, DPAPI-
   sealed on disk and never returned to the UI). The service keeps the relay
@@ -83,19 +102,22 @@ telemetry"). The Android client (`../spora-android`) is the reference UI.
   session store, so renewed tokens reach them. `MakeShare` fetches advice
   first only when none is cached.
 - **State and secrets** (`src/paths.rs`, `src/secret.rs`): everything under
-  `%ProgramData%\Spora`; `service\`, `diag\`, `records\` and `reports\` get a
-  protected DACL (SYSTEM + Administrators). `service.json`'s secrets are
-  sealed with a 32-byte state key kept in `service\state.key` as a DPAPI blob
-  (LocalSystem, purpose entropy): written before first use; one that does
-  not open (another machine, a restored backup) is replaced, which is a
-  fresh device by design. Linux dev builds keep the same layout under
+  `%ProgramData%\Spora`, which gets a protected DACL (SYSTEM +
+  Administrators) at every start, and per user under `users\<SID>\`
+  (`service\`, `diag\`, `records\`, `reports\`, `connlog\`). `service.json`'s
+  secrets are sealed with a 32-byte state key kept in `service\state.key` as
+  a DPAPI blob (LocalSystem, purpose entropy): written before first use; one
+  that does not open (another machine, a restored backup) is replaced, which
+  is a fresh device by design. Linux dev builds keep the same layout under
   `$SPORA_WINCORE_DATA` (else `$XDG_STATE_HOME/spora-wincore`), in the clear.
 - **Diagnostics**: wincore's logger is spora-service's composite one — the
-  diagnostic log file (`diag\`, JSON Lines, secrets redacted, crash files
-  from the panic hook) plus the human-readable log. Every share and connect
-  keeps a connection record in `records\`. The uploader runs in the service
-  (uploads off by default, per machine); a stop makes one last pass (≤ 3 s).
-  `ExportBugReport` zips the last days in the service and streams it; the UI
+  diagnostic log file (the served user's `diag\`, JSON Lines, secrets
+  redacted, crash files from the panic hook) plus the human-readable log
+  (every user's). Every share and connect keeps a connection record in the
+  user's `records\`. The uploader runs in the service for the user served
+  (uploads off by default, per user); letting the user go, or a stop, makes
+  one last pass (≤ 3 s). `ExportBugReport` zips the user's last days in the
+  service and streams it; the UI
   saves it to the user's Downloads (Settings › Telemetry › SAVE REPORT). The
   account's force flag refuses a switch-off (`refused_required`) and the UI
   shows the agreed notice (also once when the service says it is pending,

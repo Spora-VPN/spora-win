@@ -1,6 +1,7 @@
 //! The relays new shares are made with: Spora's (on by default) and the
-//! user's own, each with an optional token. Kept by the service, machine-wide
-//! (like the device identity they serve), in `service\relays.json`; the own
+//! user's own, each with an optional token. Kept by the service per Windows
+//! user (like the device identity they serve), in the user's
+//! `service\relays.json`; the own
 //! relays' tokens are sealed there ([`crate::secret`]) and never go back to
 //! the UI. A share keeps the relays it was made with (they are part of its
 //! URL), so these settings apply to new shares only.

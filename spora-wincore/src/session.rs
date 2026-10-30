@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::task::JoinHandle;
+use std::time::Duration;
+
 use spora_core::identity::{Credentials, ShareId};
+use spora_service::Telemetry;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 static NEXT_HANDLE: AtomicI32 = AtomicI32::new(1);
@@ -15,6 +18,8 @@ pub struct ShareSession {
     pub credentials: Credentials,
     /// Some of its relays are Spora's (they want the device's relay token).
     pub uses_spora: bool,
+    /// The user's service layer it was registered with (renewed tokens).
+    pub telemetry: Option<Arc<Telemetry>>,
 }
 
 #[allow(dead_code)]
@@ -39,6 +44,17 @@ struct Inner {
 
 pub struct SessionStore {
     inner: Mutex<Inner>,
+    /// Share and connect handler tasks still running ([`SessionStore::track`]).
+    live: tokio::sync::watch::Sender<usize>,
+}
+
+/// Held by a share or connect handler task for its whole life.
+pub struct LiveTask(Arc<SessionStore>);
+
+impl Drop for LiveTask {
+    fn drop(&mut self) {
+        self.0.live.send_modify(|n| *n -= 1);
+    }
 }
 
 impl SessionStore {
@@ -49,7 +65,23 @@ impl SessionStore {
                 shares: HashMap::new(),
                 connects: HashMap::new(),
             }),
+            live: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// Count a handler task as live until the guard drops: its session is
+    /// gone only once the task has ended.
+    pub fn track(self: &Arc<Self>) -> LiveTask {
+        self.live.send_modify(|n| *n += 1);
+        LiveTask(self.clone())
+    }
+
+    /// Wait (up to `timeout`) until no handler task is live; whether none is.
+    pub async fn idle(&self, timeout: Duration) -> bool {
+        let mut rx = self.live.subscribe();
+        tokio::time::timeout(timeout, rx.wait_for(|n| *n == 0))
+            .await
+            .is_ok_and(|r| r.is_ok())
     }
 
     /// Registers a share session, returning its handle. Returns `None` if the
@@ -62,7 +94,7 @@ impl SessionStore {
             return None;
         }
         let handle = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
-        if let Some(t) = spora_service::Telemetry::global() {
+        if let Some(t) = &session.telemetry {
             t.register_share(session.share_id, session.credentials.clone());
         }
         inner.shares.insert(handle, session);
@@ -78,7 +110,12 @@ impl SessionStore {
 
     /// Some running share is on Spora's relays.
     pub fn any_share_uses_spora(&self) -> bool {
-        self.inner.lock().unwrap().shares.values().any(|s| s.uses_spora)
+        self.inner
+            .lock()
+            .unwrap()
+            .shares
+            .values()
+            .any(|s| s.uses_spora)
     }
 
     /// See [`insert_share`]. `None` means shutting down.
@@ -113,7 +150,7 @@ impl SessionStore {
         for (_, s) in &shares {
             s.cancel.cancel();
             s.task.abort();
-            if let Some(t) = spora_service::Telemetry::global() {
+            if let Some(t) = &s.telemetry {
                 t.unregister_share(&s.share_id);
             }
         }
@@ -130,7 +167,7 @@ impl SessionStore {
 /// is still in the store (a quick off→on, the old one still going away), it
 /// is registered again rather than left without renewals.
 fn unregister(inner: &Inner, gone: &ShareSession) {
-    let Some(t) = spora_service::Telemetry::global() else {
+    let Some(t) = &gone.telemetry else {
         return;
     };
     t.unregister_share(&gone.share_id);

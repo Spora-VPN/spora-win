@@ -8,11 +8,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use url::Url;
 
+use spora_service::Telemetry;
+
 use crate::backend::Backend;
 use crate::proto::spora_server::Spora;
 use crate::proto::*;
 use crate::relays::{self, AddressError};
 use crate::session::{ConnectSession, SessionStore, ShareSession};
+use crate::users::Users;
 
 /// Hardcoded keepalive interval for Windows client tunnels.
 const KEEPALIVE_SECS: u64 = 20;
@@ -29,7 +32,10 @@ const REPORT_CHUNK: usize = 256 * 1024;
 /// forwarder as the resolver, an MTU that follows the path — `spora use`'s
 /// defaults, except for the address.
 fn tunnel_options() -> Result<spora_vpn::Options, String> {
-    let dns: Vec<String> = spora_vpn::DEFAULT_DNS.iter().map(|s| s.to_string()).collect();
+    let dns: Vec<String> = spora_vpn::DEFAULT_DNS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     spora_vpn::Options::parse(
         TUN_ADDR,
         spora_vpn::DEFAULT_TUN_ADDR6,
@@ -42,90 +48,93 @@ fn tunnel_options() -> Result<spora_vpn::Options, String> {
     )
 }
 
+/// Every call first goes through [`Users::enter`]: it is the caller's state
+/// (their [`Backend`]) the call works on, and a caller who is not the user
+/// served is refused before anything else happens.
 pub struct SporaService {
     sessions: Arc<SessionStore>,
-    backend: Arc<Backend>,
+    users: Arc<Users>,
     shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl SporaService {
     pub fn new(
         sessions: Arc<SessionStore>,
-        backend: Arc<Backend>,
+        users: Arc<Users>,
         shutdown: Arc<tokio::sync::Notify>,
     ) -> Self {
         Self {
             sessions,
-            backend,
+            users,
             shutdown,
         }
     }
 
-    /// The service layer, opened if need be (off the async threads: opening
-    /// reads and may write the state files).
-    async fn telemetry(&self) -> Option<&'static spora_service::Telemetry> {
-        let backend = self.backend.clone();
-        tokio::task::spawn_blocking(move || backend.telemetry())
-            .await
-            .ok()
-            .flatten()
-    }
-
     /// Keep the relay access fresh while new shares go on Spora's relays or
     /// a running share is on them.
-    fn update_relay_access(&self) {
-        if let Some(t) = self.backend.opened() {
+    fn update_relay_access(&self, backend: &Backend) {
+        if let Some(t) = backend.opened() {
             t.set_relay_access(
-                self.backend.relays.get().use_spora || self.sessions.any_share_uses_spora(),
+                backend.relays.get().use_spora || self.sessions.any_share_uses_spora(),
             );
         }
     }
+}
 
-    fn relay_settings(&self) -> RelaySettings {
-        let s = self.backend.relays.get();
-        let access = match self.backend.opened() {
-            Some(t) => {
-                let a = t.relay_access_status();
-                RelayAccess {
-                    available: true,
-                    cert_hash: a.cert_hash,
-                    token_expires_unix_ms: a.token_expires_unix_ms.unwrap_or(0),
-                    last_success_unix_ms: a.last_success_unix_ms.unwrap_or(0),
-                    last_error: a.last_error.unwrap_or_default(),
-                    advised: a
-                        .advised
-                        .iter()
-                        .filter_map(spora_service::access::advised_endpoint)
-                        .map(|e| e.to_url_param())
-                        .collect(),
-                    fetching: self.backend.fetching(),
-                    fetch_failed: self.backend.fetch_failed(),
-                }
+/// The user's service layer, opened if need be (off the async threads:
+/// opening reads and may write the state files).
+async fn telemetry(backend: &Arc<Backend>) -> Option<Arc<Telemetry>> {
+    let backend = backend.clone();
+    tokio::task::spawn_blocking(move || backend.telemetry())
+        .await
+        .ok()
+        .flatten()
+}
+
+fn relay_settings(backend: &Backend) -> RelaySettings {
+    let s = backend.relays.get();
+    let access = match backend.opened() {
+        Some(t) => {
+            let a = t.relay_access_status();
+            RelayAccess {
+                available: true,
+                cert_hash: a.cert_hash,
+                token_expires_unix_ms: a.token_expires_unix_ms.unwrap_or(0),
+                last_success_unix_ms: a.last_success_unix_ms.unwrap_or(0),
+                last_error: a.last_error.unwrap_or_default(),
+                advised: a
+                    .advised
+                    .iter()
+                    .filter_map(spora_service::access::advised_endpoint)
+                    .map(|e| e.to_url_param())
+                    .collect(),
+                fetching: backend.fetching(),
+                fetch_failed: backend.fetch_failed(),
             }
-            None => RelayAccess::default(),
-        };
-        RelaySettings {
-            use_spora: s.use_spora,
-            own: s
-                .own
-                .iter()
-                .map(|r| OwnRelay {
-                    endpoint: r.endpoint.clone(),
-                    has_token: r.token.is_some(),
-                })
-                .collect(),
-            access: Some(access),
         }
+        None => RelayAccess::default(),
+    };
+    RelaySettings {
+        use_spora: s.use_spora,
+        own: s
+            .own
+            .iter()
+            .map(|r| OwnRelay {
+                endpoint: r.endpoint.clone(),
+                has_token: r.token.is_some(),
+            })
+            .collect(),
+        access: Some(access),
     }
+}
 
-    fn telemetry_status(&self) -> TelemetryStatus {
-        match self.backend.opened() {
-            Some(t) => telemetry_status(t.status()),
-            None => TelemetryStatus {
-                required_notice: spora_service::REQUIRED_NOTICE.to_string(),
-                ..TelemetryStatus::default()
-            },
-        }
+fn current_telemetry(backend: &Backend) -> TelemetryStatus {
+    match backend.opened() {
+        Some(t) => telemetry_status(t.status()),
+        None => TelemetryStatus {
+            required_notice: spora_service::REQUIRED_NOTICE.to_string(),
+            ..TelemetryStatus::default()
+        },
     }
 }
 
@@ -178,17 +187,25 @@ impl Spora for SporaService {
         &self,
         request: Request<ShareRequest>,
     ) -> Result<Response<Self::ShareStream>, Status> {
+        let backend = self.users.enter(&request).await?;
         let req = request.into_inner();
         let (tx, rx) = mpsc::channel(16);
         let sessions = self.sessions.clone();
-        let telemetry = self.telemetry().await;
+        let telemetry = telemetry(&backend).await;
 
         tokio::spawn(async move {
+            // Until the session is fully gone: a hand-over to another user
+            // waits for it.
+            let _live = sessions.track();
             let share = match Share::from_blob(&req.share) {
                 Ok(s) => s,
                 Err(e) => {
-                    return send_share_error(&tx, ShareErrorCode::InvalidShare, format!("not a share: {e}"))
-                        .await;
+                    return send_share_error(
+                        &tx,
+                        ShareErrorCode::InvalidShare,
+                        format!("not a share: {e}"),
+                    )
+                    .await;
                 }
             };
             // The device identity every share is served under lives in the
@@ -211,18 +228,18 @@ impl Spora for SporaService {
                 .await;
             }
             let share_id = share.share_id;
-            let uses_spora = share.relays.iter().any(|r| r.credential == Credential::Spora);
+            let uses_spora = share
+                .relays
+                .iter()
+                .any(|r| r.credential == Credential::Spora);
 
             // Connection logging is on by default (the sharer's IP fronts the
-            // client's traffic); the UI can opt out or override dir/retention.
+            // client's traffic), in the user's own directory; the UI can opt
+            // out or set the retention.
             let conn_log = if req.disable_conn_log {
                 None
             } else {
-                let dir = if req.conn_log_dir.is_empty() {
-                    crate::paths::connlog_dir(&share.routing_hash())
-                } else {
-                    std::path::PathBuf::from(&req.conn_log_dir)
-                };
+                let dir = backend.dirs.connlog(&share.routing_hash());
                 let mut cl = spora_core::connlog::ConnLogConfig::in_dir(&dir);
                 if req.conn_log_retention_days > 0 {
                     cl.retention = std::time::Duration::from_secs(
@@ -236,7 +253,11 @@ impl Spora for SporaService {
                 "gRPC Share({}): {} relay(s){}, connection log {}",
                 spora_core::identity::hex(&share_id),
                 share.relays.len(),
-                if uses_spora { ", Spora's among them" } else { "" },
+                if uses_spora {
+                    ", Spora's among them"
+                } else {
+                    ""
+                },
                 conn_log
                     .as_ref()
                     .map(|cl| cl.dir.display().to_string())
@@ -257,7 +278,12 @@ impl Spora for SporaService {
                     }
                     _ => return,
                 };
-                if event_tx.try_send(Ok(ShareEvent { event: Some(mapped) })).is_err() {
+                if event_tx
+                    .try_send(Ok(ShareEvent {
+                        event: Some(mapped),
+                    }))
+                    .is_err()
+                {
                     // ConnLogDegraded in particular must not vanish silently.
                     warn!("gRPC Share: event stream full or gone, dropping lifecycle event");
                 }
@@ -266,7 +292,7 @@ impl Spora for SporaService {
             let mut config = spora_core::Config {
                 conn_log,
                 event_hook,
-                record: Some(crate::backend::record_config()),
+                record: Some(backend.record_config()),
                 ..spora_core::Config::default()
             };
             if uses_spora {
@@ -276,7 +302,9 @@ impl Spora for SporaService {
                 svc.set_relay_access(true);
                 config.relay_token = svc.relay_token();
                 if config.relay_token.is_none() {
-                    warn!("gRPC Share: no valid relay token yet; Spora's relays refuse the share until one comes");
+                    warn!(
+                        "gRPC Share: no valid relay token yet; Spora's relays refuse the share until one comes"
+                    );
                 }
             }
 
@@ -291,6 +319,7 @@ impl Spora for SporaService {
                         share_id,
                         credentials: session.credentials,
                         uses_spora,
+                        telemetry: Some(svc.clone()),
                     }) {
                         Some(h) => h,
                         None => {
@@ -342,6 +371,7 @@ impl Spora for SporaService {
         &self,
         request: Request<ConnectRequest>,
     ) -> Result<Response<Self::ConnectStream>, Status> {
+        let backend = self.users.enter(&request).await?;
         let url_str = request.into_inner().url;
         // Not the URL itself: it carries the share's secret, and this log
         // (unlike the diagnostic log) is not redacted.
@@ -356,6 +386,7 @@ impl Spora for SporaService {
         let sessions = self.sessions.clone();
 
         tokio::spawn(async move {
+            let _live = sessions.track();
             // Phase 1: the tunnel interface exists with its address and MTU
             // but no routes, so the relay dial and the STUN queries use the
             // normal network — spora-vpn's two-phase bring-up, the same as
@@ -370,7 +401,7 @@ impl Spora for SporaService {
                 }
             };
             let mut config = spora_core::Config {
-                record: Some(crate::backend::record_config()),
+                record: Some(backend.record_config()),
                 ..spora_core::Config::default()
             };
             if let Some(s) = &vpn {
@@ -407,7 +438,9 @@ impl Spora for SporaService {
             let transport = result.transport;
 
             // Hardcode keepalive to 20s
-            result.keepalive_knob.store(KEEPALIVE_SECS, Ordering::Relaxed);
+            result
+                .keepalive_knob
+                .store(KEEPALIVE_SECS, Ordering::Relaxed);
             if let Some(w) = result.keepalive_waker.lock().unwrap().take() {
                 w.wake();
             }
@@ -435,9 +468,7 @@ impl Spora for SporaService {
                 };
                 let _ = tx
                     .send(Ok(ConnectEvent {
-                        event: Some(connect_event::Event::Connected(ConnectConnected {
-                            handle,
-                        })),
+                        event: Some(connect_event::Event::Connected(ConnectConnected { handle })),
                     }))
                     .await;
                 tokio::select! {
@@ -491,9 +522,7 @@ impl Spora for SporaService {
                     error!("tunnel pump: {}", e);
                     let _ = tx
                         .send(Ok(ConnectEvent {
-                            event: Some(connect_event::Event::Error(ConnectError {
-                                message: e,
-                            })),
+                            event: Some(connect_event::Event::Error(ConnectError { message: e })),
                         }))
                         .await;
                     cancel.cancel();
@@ -538,9 +567,7 @@ impl Spora for SporaService {
 
             let _ = tx
                 .send(Ok(ConnectEvent {
-                    event: Some(connect_event::Event::Connected(ConnectConnected {
-                        handle,
-                    })),
+                    event: Some(connect_event::Event::Connected(ConnectConnected { handle })),
                 }))
                 .await;
 
@@ -563,11 +590,11 @@ impl Spora for SporaService {
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 
-
     async fn stop_share(
         &self,
         request: Request<StopShareRequest>,
     ) -> Result<Response<StopShareResponse>, Status> {
+        self.users.enter(&request).await?;
         let handle = request.into_inner().handle;
         info!("gRPC StopShare(handle={})", handle);
 
@@ -585,6 +612,7 @@ impl Spora for SporaService {
         &self,
         request: Request<DisconnectRequest>,
     ) -> Result<Response<DisconnectResponse>, Status> {
+        self.users.enter(&request).await?;
         let handle = request.into_inner().handle;
         info!("gRPC Disconnect(handle={})", handle);
 
@@ -601,9 +629,10 @@ impl Spora for SporaService {
 
     async fn make_share(
         &self,
-        _request: Request<MakeShareRequest>,
+        request: Request<MakeShareRequest>,
     ) -> Result<Response<MakeShareResponse>, Status> {
-        let settings = self.backend.relays.get();
+        let backend = self.users.enter(&request).await?;
+        let settings = backend.relays.get();
         let failed = |error: MakeShareError, detail: String| {
             warn!("gRPC MakeShare: {error:?}: {detail}");
             Response::new(MakeShareResponse {
@@ -613,9 +642,12 @@ impl Spora for SporaService {
             })
         };
         if !settings.has_relays() {
-            return Ok(failed(MakeShareError::NoRelays, "no relays configured".into()));
+            return Ok(failed(
+                MakeShareError::NoRelays,
+                "no relays configured".into(),
+            ));
         }
-        let Some(svc) = self.telemetry().await else {
+        let Some(svc) = telemetry(&backend).await else {
             return Ok(failed(
                 MakeShareError::ServiceUnavailable,
                 "the service state is unavailable (see the service log)".into(),
@@ -625,8 +657,8 @@ impl Spora for SporaService {
         // yet (a fresh install, or the API was never reachable); otherwise
         // offline, on the relays last fetched.
         if settings.use_spora && svc.relay_access_status().advised.is_empty() {
-            let backend = self.backend.clone();
-            let fetched = tokio::task::spawn_blocking(move || backend.fetch(svc))
+            let (backend, svc) = (backend.clone(), svc.clone());
+            let fetched = tokio::task::spawn_blocking(move || backend.fetch(&svc))
                 .await
                 .map_err(|e| e.to_string())
                 .and_then(|r| r);
@@ -634,13 +666,21 @@ impl Spora for SporaService {
                 return Ok(failed(MakeShareError::RelaysUnreachable, e));
             }
         }
-        let own: Vec<_> = settings.own.iter().filter_map(relays::OwnRelay::entry).collect();
+        let own: Vec<_> = settings
+            .own
+            .iter()
+            .filter_map(relays::OwnRelay::entry)
+            .collect();
         match svc.make_share(own, settings.use_spora) {
             Ok(share) => {
                 info!(
                     "gRPC MakeShare: new share {} on {}{} own relay(s)",
                     spora_core::identity::hex(&share.share_id),
-                    if settings.use_spora { "Spora's relays + " } else { "" },
+                    if settings.use_spora {
+                        "Spora's relays + "
+                    } else {
+                        ""
+                    },
                     settings.own.len()
                 );
                 Ok(Response::new(MakeShareResponse {
@@ -659,33 +699,39 @@ impl Spora for SporaService {
 
     async fn get_relay_settings(
         &self,
-        _request: Request<GetRelaySettingsRequest>,
+        request: Request<GetRelaySettingsRequest>,
     ) -> Result<Response<RelaySettings>, Status> {
+        let backend = self.users.enter(&request).await?;
         // Opening (if it failed before) is what a settings page needs to
         // show anything at all.
-        let _ = self.telemetry().await;
-        Ok(Response::new(self.relay_settings()))
+        let _ = telemetry(&backend).await;
+        Ok(Response::new(relay_settings(&backend)))
     }
 
     async fn set_spora_relays(
         &self,
         request: Request<SetSporaRelaysRequest>,
     ) -> Result<Response<RelaySettings>, Status> {
+        let backend = self.users.enter(&request).await?;
         let use_spora = request.into_inner().use_spora;
-        self.backend.relays.update(|s| s.use_spora = use_spora);
-        info!("Spora's relays {} for new shares", if use_spora { "on" } else { "off" });
-        self.update_relay_access();
-        Ok(Response::new(self.relay_settings()))
+        backend.relays.update(|s| s.use_spora = use_spora);
+        info!(
+            "Spora's relays {} for new shares",
+            if use_spora { "on" } else { "off" }
+        );
+        self.update_relay_access(&backend);
+        Ok(Response::new(relay_settings(&backend)))
     }
 
     async fn put_own_relay(
         &self,
         request: Request<PutOwnRelayRequest>,
     ) -> Result<Response<PutOwnRelayResponse>, Status> {
+        let backend = self.users.enter(&request).await?;
         let req = request.into_inner();
         let refuse = |error: RelayAddressError| {
             Response::new(PutOwnRelayResponse {
-                settings: Some(self.relay_settings()),
+                settings: Some(relay_settings(&backend)),
                 error: error as i32,
             })
         };
@@ -695,7 +741,7 @@ impl Spora for SporaService {
         };
         let token_action = TokenAction::try_from(req.token_action).unwrap_or(TokenAction::Keep);
         let token = req.token.trim().to_string();
-        let outcome = self.backend.relays.update(|s| {
+        let outcome = backend.relays.update(|s| {
             let index = if req.original.is_empty() {
                 None
             } else {
@@ -704,8 +750,7 @@ impl Spora for SporaService {
                     None => return Err(RelayAddressError::Gone),
                 }
             };
-            if s
-                .own
+            if s.own
                 .iter()
                 .enumerate()
                 .any(|(i, r)| Some(i) != index && r.endpoint.eq_ignore_ascii_case(&endpoint))
@@ -733,10 +778,14 @@ impl Spora for SporaService {
         info!(
             "own relay {} {}",
             endpoint,
-            if req.original.is_empty() { "added" } else { "changed" }
+            if req.original.is_empty() {
+                "added"
+            } else {
+                "changed"
+            }
         );
         Ok(Response::new(PutOwnRelayResponse {
-            settings: Some(self.relay_settings()),
+            settings: Some(relay_settings(&backend)),
             error: RelayAddressError::Ok as i32,
         }))
     }
@@ -745,39 +794,45 @@ impl Spora for SporaService {
         &self,
         request: Request<RemoveOwnRelayRequest>,
     ) -> Result<Response<RelaySettings>, Status> {
+        let backend = self.users.enter(&request).await?;
         let endpoint = request.into_inner().endpoint;
-        self.backend.relays.update(|s| s.own.retain(|r| r.endpoint != endpoint));
+        backend
+            .relays
+            .update(|s| s.own.retain(|r| r.endpoint != endpoint));
         info!("own relay {endpoint} removed");
-        Ok(Response::new(self.relay_settings()))
+        Ok(Response::new(relay_settings(&backend)))
     }
 
     async fn refresh_relays(
         &self,
-        _request: Request<RefreshRelaysRequest>,
+        request: Request<RefreshRelaysRequest>,
     ) -> Result<Response<RelaySettings>, Status> {
-        if let Some(svc) = self.telemetry().await {
-            let backend = self.backend.clone();
-            let _ = tokio::task::spawn_blocking(move || backend.fetch(svc)).await;
+        let backend = self.users.enter(&request).await?;
+        if let Some(svc) = telemetry(&backend).await {
+            let b = backend.clone();
+            let _ = tokio::task::spawn_blocking(move || b.fetch(&svc)).await;
         }
-        Ok(Response::new(self.relay_settings()))
+        Ok(Response::new(relay_settings(&backend)))
     }
 
     async fn get_telemetry(
         &self,
-        _request: Request<GetTelemetryRequest>,
+        request: Request<GetTelemetryRequest>,
     ) -> Result<Response<TelemetryStatus>, Status> {
-        let _ = self.telemetry().await;
-        Ok(Response::new(self.telemetry_status()))
+        let backend = self.users.enter(&request).await?;
+        let _ = telemetry(&backend).await;
+        Ok(Response::new(current_telemetry(&backend)))
     }
 
     async fn set_telemetry(
         &self,
         request: Request<SetTelemetryRequest>,
     ) -> Result<Response<SetTelemetryResponse>, Status> {
+        let backend = self.users.enter(&request).await?;
         let enabled = request.into_inner().enabled;
-        let Some(svc) = self.telemetry().await else {
+        let Some(svc) = telemetry(&backend).await else {
             return Ok(Response::new(SetTelemetryResponse {
-                status: Some(self.telemetry_status()),
+                status: Some(current_telemetry(&backend)),
                 refused_required: false,
                 error: "the service state is unavailable".into(),
             }));
@@ -793,12 +848,15 @@ impl Spora for SporaService {
                 (true, String::new())
             }
             Err(e) => {
-                warn!("telemetry: cannot switch uploads {}: {e}", if enabled { "on" } else { "off" });
+                warn!(
+                    "telemetry: cannot switch uploads {}: {e}",
+                    if enabled { "on" } else { "off" }
+                );
                 (false, e.to_string())
             }
         };
         Ok(Response::new(SetTelemetryResponse {
-            status: Some(self.telemetry_status()),
+            status: Some(current_telemetry(&backend)),
             refused_required,
             error,
         }))
@@ -806,24 +864,26 @@ impl Spora for SporaService {
 
     async fn acknowledge_telemetry_notice(
         &self,
-        _request: Request<AcknowledgeTelemetryNoticeRequest>,
+        request: Request<AcknowledgeTelemetryNoticeRequest>,
     ) -> Result<Response<TelemetryStatus>, Status> {
-        if let Some(svc) = self.backend.opened() {
+        let backend = self.users.enter(&request).await?;
+        if let Some(svc) = backend.opened() {
             let r = tokio::task::spawn_blocking(move || svc.acknowledge_notice()).await;
             if let Ok(Err(e)) = r {
                 warn!("telemetry: acknowledging the notice: {e}");
             }
         }
-        Ok(Response::new(self.telemetry_status()))
+        Ok(Response::new(current_telemetry(&backend)))
     }
 
     async fn export_bug_report(
         &self,
         request: Request<ExportBugReportRequest>,
     ) -> Result<Response<Self::ExportBugReportStream>, Status> {
+        let backend = self.users.enter(&request).await?;
         let note = Some(request.into_inner().note).filter(|n| !n.trim().is_empty());
-        let svc = self.telemetry().await;
-        let summary = tokio::task::spawn_blocking(move || export_report(svc, note))
+        let svc = telemetry(&backend).await;
+        let summary = tokio::task::spawn_blocking(move || export_report(&backend, svc, note))
             .await
             .map_err(|e| Status::internal(e.to_string()))?
             .map_err(|e| {
@@ -833,7 +893,9 @@ impl Spora for SporaService {
         let (tx, rx) = mpsc::channel(4);
         tokio::spawn(async move {
             for chunk in summary.chunks(REPORT_CHUNK) {
-                let msg = BugReportChunk { data: chunk.to_vec() };
+                let msg = BugReportChunk {
+                    data: chunk.to_vec(),
+                };
                 if tx.send(Ok(msg)).await.is_err() {
                     break;
                 }
@@ -844,8 +906,9 @@ impl Spora for SporaService {
 
     async fn shutdown(
         &self,
-        _request: Request<ShutdownRequest>,
+        request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
+        self.users.enter(&request).await?;
         // On Windows the process is a Windows service whose lifecycle belongs
         // to the SCM: a clean self-exit would report SERVICE_STOPPED (so the
         // failure/restart actions never fire) and leave every user's tunnels
@@ -867,18 +930,19 @@ impl Spora for SporaService {
     }
 }
 
-/// Bundle the recent records, diagnostic log and crash files into a zip in
-/// the service's private reports directory, read it back and delete it. The
+/// Bundle the user's recent records, diagnostic log and crash files into a
+/// zip in their private reports directory, read it back and delete it. The
 /// UI saves the bytes where the user can reach them: the service never
 /// writes into a user's folders (it runs as SYSTEM, and the path would be
 /// the caller's to choose).
 fn export_report(
-    svc: Option<&'static spora_service::Telemetry>,
+    backend: &Backend,
+    svc: Option<Arc<Telemetry>>,
     note: Option<String>,
 ) -> Result<Vec<u8>, String> {
     use std::collections::BTreeMap;
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    let dir = crate::paths::reports_dir();
+    let dir = backend.dirs.reports();
     crate::paths::ensure_private_dir(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let out = dir.join(format!(
         "report-{}-{}.zip",
@@ -891,8 +955,8 @@ fn export_report(
         // Without the service state: the same directories, no device id.
         None => {
             let mut opts = spora_service::BundleOptions::new(&out);
-            opts.record_dirs = vec![crate::paths::records_dir()];
-            opts.log_dir = Some(crate::paths::diag_dir());
+            opts.record_dirs = vec![backend.dirs.records()];
+            opts.log_dir = Some(backend.dirs.diag());
             opts.note = note;
             opts.platform = platform;
             opts.platform

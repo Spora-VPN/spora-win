@@ -1,6 +1,6 @@
 //! Settings: the relays new links are made with (Spora's and the user's
-//! own) and the telemetry upload switch, both kept by the service
-//! (machine-wide, like the device identity they belong to). This module
+//! own) and the telemetry upload switch, both kept by the service for the
+//! Windows user (like the device identity they belong to). This module
 //! holds what the service last said, turns it into what the Settings pane
 //! shows, polls it while the pane is open, and handles the pane's actions —
 //! plus the force notice (the account requires telemetry) and saving a
@@ -16,7 +16,8 @@ use super::{AppState, AppWindow, Banner, Ctx, OwnRelayItem, Pane, fmt_datetime, 
 
 /// The share's link no longer works: the service's state (the device
 /// identity every share is served under) was reset.
-pub const LINK_RESET: &str = "This link no longer works: Spora's data on this PC was reset.";
+pub const LINK_RESET: &str =
+    "This link no longer works: Spora's data for this Windows user was reset.";
 
 const SUPPORT_MAIL: &str = "support@spora.to";
 
@@ -25,6 +26,8 @@ const SUPPORT_MAIL: &str = "support@spora.to";
 /// force notice.
 const POLL_OPEN: Duration = Duration::from_secs(2);
 const POLL_IDLE: Duration = Duration::from_secs(60);
+/// While the service serves another Windows user: how soon to ask again.
+const POLL_REFUSED: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct SettingsState {
@@ -42,6 +45,9 @@ pub struct SettingsState {
     pub required_shown: bool,
     /// Show the force notice at the next render.
     pub show_required: bool,
+    /// The service serves another Windows user: what it said, shown in the
+    /// banner for as long as that lasts.
+    pub refused: Option<String>,
     pub report: Report,
 }
 
@@ -229,8 +235,23 @@ pub async fn poll(ctx: Ctx) {
         let Some(grpc) = ctx.client() else { return };
         let relays = grpc.relay_settings().await;
         let telemetry = grpc.telemetry().await;
+        let refused = grpc.refused();
         let (open, fetch) = {
             let mut s = ctx.lock();
+            match (&relays, refused) {
+                (Err(why), true) => {
+                    s.banner = Some(Banner::plain(why.clone()));
+                    s.settings.refused = Some(why.clone());
+                }
+                (_, false) => {
+                    if let Some(why) = s.settings.refused.take()
+                        && s.banner.as_ref().is_some_and(|b| b.text == why)
+                    {
+                        s.banner = None;
+                    }
+                }
+                _ => {}
+            }
             if let Ok(r) = relays {
                 s.settings.relays = Some(r);
             }
@@ -266,7 +287,13 @@ pub async fn poll(ctx: Ctx) {
             });
         }
         tokio::select! {
-            _ = tokio::time::sleep(if open { POLL_OPEN } else { POLL_IDLE }) => {}
+            _ = tokio::time::sleep(if open {
+                POLL_OPEN
+            } else if refused {
+                POLL_REFUSED
+            } else {
+                POLL_IDLE
+            }) => {}
             _ = ctx.poke.notified() => {}
         }
     }

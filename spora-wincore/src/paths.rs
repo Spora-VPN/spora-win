@@ -1,15 +1,18 @@
 //! Where the service keeps what it keeps. On Windows everything lives under
-//! `%ProgramData%\Spora`:
+//! `%ProgramData%\Spora`, which is private: SYSTEM and Administrators only
+//! (no user reads anything there; the UI gets what it shows over the pipe).
 //!
-//! - `service\` — spora-service's `service.json` (the device identity, the
-//!   upload switch, the device's registration, the relay access), the
-//!   DPAPI-protected key its secrets are sealed with (`state.key`), and the
-//!   relay settings (`relays.json`). Private: SYSTEM and Administrators only.
-//! - `diag\` — the diagnostic log and crash files; `records\` — the
-//!   connection records; `reports\` — bug-report zips while they are being
-//!   streamed to the UI. Private like `service\`.
-//! - `connlog\<routing hash>\` — each share's connection log.
-//! - `spora-wincore.log` — the human-readable service log.
+//! - `users\<SID>\` — one Windows user's own (see `users.rs`):
+//!   - `service\` — spora-service's `service.json` (the user's device
+//!     identity, upload switch, registration, relay access), the
+//!     DPAPI-protected key its secrets are sealed with (`state.key`), and
+//!     the relay settings (`relays.json`);
+//!   - `diag\` — the diagnostic log and crash files; `records\` — the
+//!     connection records; `reports\` — bug-report zips while they are
+//!     being streamed to the UI;
+//!   - `connlog\<routing hash>\` — each share's connection log.
+//! - `spora-wincore.log` — the human-readable service log (every user's
+//!   sessions; it never leaves the machine).
 //!
 //! None of it may be backed up and restored onto another machine: a restored
 //! device token would clone a device (the DPAPI key does not open elsewhere,
@@ -20,6 +23,8 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::users::UserId;
 
 pub fn data_dir() -> PathBuf {
     #[cfg(windows)]
@@ -41,40 +46,64 @@ pub fn data_dir() -> PathBuf {
     }
 }
 
-/// spora-service's state directory (plus the state key and relay settings).
-pub fn service_dir() -> PathBuf {
-    data_dir().join("service")
-}
-
-pub fn diag_dir() -> PathBuf {
-    data_dir().join("diag")
-}
-
-pub fn records_dir() -> PathBuf {
-    data_dir().join("records")
-}
-
-pub fn reports_dir() -> PathBuf {
-    data_dir().join("reports")
-}
-
 /// The human-readable service log of a `--service` run.
 pub fn service_log() -> PathBuf {
     data_dir().join("spora-wincore.log")
 }
 
-/// A share's connection log: per routing hash, so two shares never
-/// interleave their logs (the core binds the log's database to it).
-pub fn connlog_dir(routing_hash: &[u8]) -> PathBuf {
-    data_dir()
-        .join("connlog")
-        .join(spora_core::identity::hex(routing_hash))
+/// One Windows user's directories.
+#[derive(Clone, Debug)]
+pub struct UserDirs {
+    root: PathBuf,
+}
+
+impl UserDirs {
+    pub fn of(user: &UserId) -> UserDirs {
+        UserDirs {
+            root: data_dir().join("users").join(user.as_str()),
+        }
+    }
+
+    /// spora-service's state directory (plus the state key and the relay
+    /// settings).
+    pub fn service(&self) -> PathBuf {
+        self.root.join("service")
+    }
+
+    pub fn diag(&self) -> PathBuf {
+        self.root.join("diag")
+    }
+
+    pub fn records(&self) -> PathBuf {
+        self.root.join("records")
+    }
+
+    pub fn reports(&self) -> PathBuf {
+        self.root.join("reports")
+    }
+
+    /// A share's connection log: per routing hash, so two shares never
+    /// interleave their logs (the core binds the log's database to it).
+    pub fn connlog(&self, routing_hash: &[u8]) -> PathBuf {
+        self.root
+            .join("connlog")
+            .join(spora_core::identity::hex(routing_hash))
+    }
+
+    /// Create them, private (the root is restricted again on its own, in
+    /// case `%ProgramData%\Spora` could not be).
+    pub fn ensure(&self) -> io::Result<()> {
+        ensure_private_dir(&self.root)?;
+        for d in [self.service(), self.diag(), self.records(), self.reports()] {
+            std::fs::create_dir_all(&d)?;
+        }
+        Ok(())
+    }
 }
 
 /// `dir`, created if need be and readable by SYSTEM and Administrators
-/// only (Unix: 0700). Applied to an existing directory too, so one an
-/// earlier version made with the inherited `%ProgramData%` permissions
-/// (where every user may read) is closed as well.
+/// only (Unix: 0700). Applied to an existing directory too: what is inside
+/// gets the same.
 pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     restrict(dir)

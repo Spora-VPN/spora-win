@@ -1,11 +1,12 @@
 mod backend;
 mod paths;
+#[cfg(windows)]
+mod pipe;
 mod relays;
 mod secret;
 mod service;
 mod session;
-#[cfg(windows)]
-mod pipe;
+mod users;
 #[cfg(windows)]
 mod winsvc;
 
@@ -21,6 +22,7 @@ use tonic::transport::Server;
 use crate::proto::spora_server::SporaServer;
 use crate::service::SporaService;
 use crate::session::SessionStore;
+use crate::users::Users;
 
 /// Control-channel endpoint on Windows. Must match the client constant in
 /// spora-winui/src/grpc.rs.
@@ -63,14 +65,14 @@ fn main() {
 }
 
 /// The process logger, behind spora-service's composite logger: the
-/// diagnostic log file (`%ProgramData%\Spora\diag`, JSON Lines, its own
-/// fixed levels, share-link secrets redacted — what bug reports and uploads
-/// carry) plus the human-readable log as `RUST_LOG` says (default info):
-/// `spora-wincore.log` under the SCM, stderr in console mode unless
-/// `--log-file` names a file. Crash files from a panic hook land beside the
-/// diagnostic log.
+/// diagnostic log file (JSON Lines, its own fixed levels, share-link secrets
+/// redacted — what bug reports and uploads carry) plus the human-readable
+/// log as `RUST_LOG` says (default info): `spora-wincore.log` under the SCM,
+/// stderr in console mode unless `--log-file` names a file. The diagnostic
+/// log is the served user's, in their directory (crash files from the
+/// panic hook beside it): none until a user is served (see `users.rs`).
 fn init_logging(log_file: Option<String>, service_mode: bool) {
-    use spora_service::diag::{self, DiagConfig, Secondary};
+    use spora_service::diag::{self, Secondary};
 
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
@@ -85,19 +87,24 @@ fn init_logging(log_file: Option<String>, service_mode: bool) {
         builder.filter_module(target, log::LevelFilter::Off);
     }
 
+    // Everything the service keeps is private to it, the human-readable log
+    // (every user's sessions) included: closed before anything is written.
+    let data = paths::data_dir();
+    let data_error = paths::ensure_private_dir(&data)
+        .err()
+        .map(|e| format!("data directory {}: {e}", data.display()));
     // Under the SCM there is no console, so default to a file under
     // %ProgramData%\Spora.
-    let path = log_file.map(std::path::PathBuf::from).or_else(|| {
-        if service_mode {
-            let _ = std::fs::create_dir_all(paths::data_dir());
-            Some(paths::service_log())
-        } else {
-            None
-        }
-    });
+    let path = log_file
+        .map(std::path::PathBuf::from)
+        .or_else(|| service_mode.then(paths::service_log));
     let mut file_error = None;
     if let Some(p) = &path {
-        match std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+        {
             Ok(file) => {
                 builder.target(env_logger::Target::Pipe(Box::new(file)));
             }
@@ -108,20 +115,13 @@ fn init_logging(log_file: Option<String>, service_mode: bool) {
     let secondary = builder.build();
     let level = secondary.filter();
 
-    let diag_dir = paths::diag_dir();
-    let diag_error = paths::ensure_private_dir(&diag_dir)
-        .err()
-        .map(|e| format!("diagnostic log directory {}: {e}", diag_dir.display()));
-    diag::init(
-        Some(DiagConfig::in_dir(diag_dir).with_platform(backend::platform())),
-        Some(Secondary::new(Box::new(secondary), level)),
-    );
+    diag::init(None, Some(Secondary::new(Box::new(secondary), level)));
     diag::install_panic_hook();
 
     if let (Some(p), None) = (&path, &file_error) {
         info!("Logging to file: {}", p.display());
     }
-    for e in [file_error, diag_error].into_iter().flatten() {
+    for e in [data_error, file_error].into_iter().flatten() {
         log::warn!("{e}");
     }
 }
@@ -146,15 +146,9 @@ async fn run_server(
     shutdown: Arc<tokio::sync::Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sessions = Arc::new(SessionStore::new());
-    let backend = Arc::new(backend::Backend::new());
-    // The device identity, the relay access and the uploader: opened now so
-    // the relay token is renewed and uploads run before any UI asks. Local
-    // files only; a failure is retried when something needs it.
-    {
-        let backend = backend.clone();
-        tokio::task::spawn_blocking(move || backend.telemetry());
-    }
-    let service = SporaService::new(sessions.clone(), backend, shutdown.clone());
+    // Whose state is open, and whose calls are refused meanwhile.
+    let users = Users::new(sessions.clone());
+    let service = SporaService::new(sessions.clone(), users.clone(), shutdown.clone());
 
     // Stop the sessions as part of the shutdown signal: their event streams
     // end, so tonic's graceful drain below isn't held open forever by
@@ -173,31 +167,26 @@ async fn run_server(
         info!("spora-wincore gRPC server listening on {}", PIPE_NAME);
         Server::builder()
             .add_service(SporaServer::new(service))
-            .serve_with_incoming_shutdown(pipe::incoming(PIPE_NAME)?, drain)
+            .serve_with_incoming_shutdown(pipe::incoming(PIPE_NAME, users.clone())?, drain)
             .await?;
     }
 
     #[cfg(not(windows))]
     {
         let addr = "[::1]:50051".parse::<std::net::SocketAddr>()?;
+        let listener = tokio::net::TcpListener::bind(addr).await?;
         info!("spora-wincore gRPC server listening on {}", addr);
         Server::builder()
             .add_service(SporaServer::new(service))
-            .serve_with_shutdown(addr, drain)
+            .serve_with_incoming_shutdown(users::tcp_incoming(listener, users.clone()), drain)
             .await?;
     }
 
     // Backstop for sessions created while the server was draining.
     sessions.shutdown_all();
-    // One last upload pass (only with uploads on), so the records the stop
-    // just closed go now rather than after the next start; short, since a
-    // system shutdown gives services a few seconds.
-    let _ = tokio::task::spawn_blocking(|| {
-        spora_service::finish(FINAL_UPLOAD_WAIT);
-        spora_service::diag::flush(std::time::Duration::from_secs(1));
-    })
-    .await;
+    // The user served is let go: one last upload pass (only with uploads
+    // on), so the records the stop just closed go now rather than after the
+    // next start, and their log file is written out.
+    users.shutdown().await;
     Ok(())
 }
-
-const FINAL_UPLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(3);

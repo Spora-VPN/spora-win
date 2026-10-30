@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use tonic::transport::Channel;
 
 pub mod proto {
@@ -54,6 +57,9 @@ fn open_pipe_client(
 #[derive(Clone)]
 pub struct GrpcClient {
     inner: SporaClient<Channel>,
+    /// The last answer was a refusal: the service serves another Windows
+    /// user (one at a time).
+    refused: Arc<AtomicBool>,
 }
 
 impl GrpcClient {
@@ -72,9 +78,7 @@ impl GrpcClient {
             }))
             .await
             .map_err(|e| format!("gRPC connect failed: {e}"))?;
-        Ok(Self {
-            inner: SporaClient::new(channel),
-        })
+        Ok(Self::new(channel))
     }
 
     /// Linux dev builds: wincore runs as a plain child process serving TCP.
@@ -84,58 +88,74 @@ impl GrpcClient {
             .connect()
             .await
             .map_err(|e| format!("gRPC connect failed: {e}"))?;
-        Ok(Self {
+        Ok(Self::new(channel))
+    }
+
+    fn new(channel: Channel) -> Self {
+        Self {
             inner: SporaClient::new(channel),
+            refused: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The service's answer to `rpc`. A refusal (another Windows user is
+    /// served, or the service could not tell who is asking) comes with the
+    /// service's own sentence, which is what the user sees.
+    fn answer<T>(&self, rpc: &str, r: Result<T, tonic::Status>) -> Result<T, String> {
+        let refused = r
+            .as_ref()
+            .is_err_and(|e| e.code() == tonic::Code::PermissionDenied);
+        self.refused.store(refused, Ordering::SeqCst);
+        r.map_err(|e| match e.code() {
+            tonic::Code::PermissionDenied | tonic::Code::Unauthenticated => e.message().to_string(),
+            _ => format!("{rpc} RPC failed: {e}"),
         })
+    }
+
+    /// Whether the last answer was a refusal because the service serves
+    /// another Windows user.
+    pub fn refused(&self) -> bool {
+        self.refused.load(Ordering::SeqCst)
     }
 
     /// A new share on the relays the service's settings name.
     pub async fn make_share(&self) -> Result<MakeShareResponse, String> {
-        let resp = self
-            .inner
-            .clone()
-            .make_share(MakeShareRequest {})
-            .await
-            .map_err(|e| format!("MakeShare RPC failed: {e}"))?;
-        Ok(resp.into_inner())
+        let r = self.inner.clone().make_share(MakeShareRequest {}).await;
+        Ok(self.answer("MakeShare", r)?.into_inner())
     }
 
     pub async fn share(&self, share: Vec<u8>) -> Result<tonic::Streaming<ShareEvent>, String> {
-        let resp = self
+        // Connection-log fields at their defaults: logging enabled in the
+        // service's default directory with default retention.
+        let r = self
             .inner
             .clone()
-            // Connection-log fields at their defaults: logging enabled in the
-            // service's default directory with default retention.
             .share(ShareRequest {
                 share,
                 disable_conn_log: false,
-                conn_log_dir: String::new(),
                 conn_log_retention_days: 0,
                 conn_log_sessions_only: false,
             })
-            .await
-            .map_err(|e| format!("Share RPC failed: {e}"))?;
-        Ok(resp.into_inner())
+            .await;
+        Ok(self.answer("Share", r)?.into_inner())
     }
 
     pub async fn relay_settings(&self) -> Result<RelaySettings, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .get_relay_settings(GetRelaySettingsRequest {})
-            .await
-            .map_err(|e| format!("GetRelaySettings RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("GetRelaySettings", r)?.into_inner())
     }
 
     pub async fn set_spora_relays(&self, use_spora: bool) -> Result<RelaySettings, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .set_spora_relays(SetSporaRelaysRequest { use_spora })
-            .await
-            .map_err(|e| format!("SetSporaRelays RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("SetSporaRelays", r)?.into_inner())
     }
 
     /// Add (`original` empty) or change an own relay.
@@ -146,7 +166,7 @@ impl GrpcClient {
         token_action: TokenAction,
         token: String,
     ) -> Result<PutOwnRelayResponse, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .put_own_relay(PutOwnRelayRequest {
@@ -155,72 +175,69 @@ impl GrpcClient {
                 token_action: token_action as i32,
                 token,
             })
-            .await
-            .map_err(|e| format!("PutOwnRelay RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("PutOwnRelay", r)?.into_inner())
     }
 
     pub async fn remove_own_relay(&self, endpoint: String) -> Result<RelaySettings, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .remove_own_relay(RemoveOwnRelayRequest { endpoint })
-            .await
-            .map_err(|e| format!("RemoveOwnRelay RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("RemoveOwnRelay", r)?.into_inner())
     }
 
     pub async fn refresh_relays(&self) -> Result<RelaySettings, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .refresh_relays(RefreshRelaysRequest {})
-            .await
-            .map_err(|e| format!("RefreshRelays RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("RefreshRelays", r)?.into_inner())
     }
 
     pub async fn telemetry(&self) -> Result<TelemetryStatus, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .get_telemetry(GetTelemetryRequest {})
-            .await
-            .map_err(|e| format!("GetTelemetry RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("GetTelemetry", r)?.into_inner())
     }
 
     pub async fn set_telemetry(&self, enabled: bool) -> Result<SetTelemetryResponse, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .set_telemetry(SetTelemetryRequest { enabled })
-            .await
-            .map_err(|e| format!("SetTelemetry RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("SetTelemetry", r)?.into_inner())
     }
 
     pub async fn acknowledge_telemetry_notice(&self) -> Result<TelemetryStatus, String> {
-        Ok(self
+        let r = self
             .inner
             .clone()
             .acknowledge_telemetry_notice(AcknowledgeTelemetryNoticeRequest {})
-            .await
-            .map_err(|e| format!("AcknowledgeTelemetryNotice RPC failed: {e}"))?
-            .into_inner())
+            .await;
+        Ok(self.answer("AcknowledgeTelemetryNotice", r)?.into_inner())
     }
 
     /// The bug-report zip, whole.
     pub async fn export_bug_report(&self, note: String) -> Result<Vec<u8>, String> {
-        let mut stream = self
+        let r = self
             .inner
             .clone()
             .export_bug_report(ExportBugReportRequest { note })
+            .await;
+        let mut stream = self.answer("ExportBugReport", r)?.into_inner();
+        let mut zip = Vec::new();
+        while let Some(chunk) = stream
+            .message()
             .await
             .map_err(|e| e.message().to_string())?
-            .into_inner();
-        let mut zip = Vec::new();
-        while let Some(chunk) = stream.message().await.map_err(|e| e.message().to_string())? {
+        {
             zip.extend_from_slice(&chunk.data);
         }
         if zip.is_empty() {
@@ -229,28 +246,17 @@ impl GrpcClient {
         Ok(zip)
     }
 
-    pub async fn connect_vpn(
-        &self,
-        url: String,
-    ) -> Result<tonic::Streaming<ConnectEvent>, String> {
-        let resp = self
-            .inner
-            .clone()
-            .connect(ConnectRequest { url })
-            .await
-            .map_err(|e| format!("Connect RPC failed: {e}"))?;
-        Ok(resp.into_inner())
+    pub async fn connect_vpn(&self, url: String) -> Result<tonic::Streaming<ConnectEvent>, String> {
+        let r = self.inner.clone().connect(ConnectRequest { url }).await;
+        Ok(self.answer("Connect", r)?.into_inner())
     }
 
     /// Stops the wincore process. Only used on Linux dev builds, where the
     /// UI spawned wincore itself; on Windows the service outlives the UI.
     #[cfg(not(windows))]
     pub async fn shutdown(&self) -> Result<(), String> {
-        self.inner
-            .clone()
-            .shutdown(ShutdownRequest {})
-            .await
-            .map_err(|e| format!("Shutdown RPC failed: {e}"))?;
+        let r = self.inner.clone().shutdown(ShutdownRequest {}).await;
+        self.answer("Shutdown", r)?;
         Ok(())
     }
 }

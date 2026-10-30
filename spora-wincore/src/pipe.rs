@@ -4,16 +4,18 @@
 //! decides who may talk to the service: the pipe DACL admits SYSTEM,
 //! Administrators, and interactively logged-on users (the desktop UI runs
 //! unelevated), and remote clients are rejected outright. A localhost TCP
-//! port would be reachable by every local security context.
+//! port would be reachable by every local security context. Each accepted
+//! connection is tagged with the Windows user on the other end, which is
+//! what the service serves (see `users.rs`).
 
 use std::io;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::os::windows::io::AsRawHandle;
+use std::sync::Arc;
 
 use futures_util::stream::Stream;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
-use tonic::transport::server::Connected;
+
+use crate::users::{Conn, UserId, Users};
 
 /// Pipe DACL. `D:P` protects the DACL from inheriting anything wider.
 ///
@@ -30,40 +32,67 @@ use tonic::transport::server::Connected;
 ///   denied here.
 const PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12008b;;;IU)";
 
-/// A connected pipe instance, wrapped so tonic can treat it as an accepted
-/// connection.
-pub struct PipeConn(NamedPipeServer);
+/// The Windows user on the other end of `pipe`: the user of the client's
+/// process token, as a SID string. Asked right after the connection is
+/// accepted, while the client that opened the pipe is there: a process ID
+/// is reused only once its process is gone, and a client's connection can
+/// only be handed to a process its own user controls (as Tailscale's
+/// Windows service tells its users apart).
+fn client_user(pipe: &NamedPipeServer) -> io::Result<UserId> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
-impl Connected for PipeConn {
-    type ConnectInfo = ();
-    fn connect_info(&self) -> Self::ConnectInfo {}
-}
-
-impl AsyncRead for PipeConn {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_read(cx, buf)
-    }
-}
-
-impl AsyncWrite for PipeConn {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.0).poll_write(cx, buf)
+    /// Closes a handle on every way out.
+    struct Owned(HANDLE);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            // SAFETY: a handle this function opened and closes once.
+            unsafe { CloseHandle(self.0) };
+        }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.0).poll_shutdown(cx)
+    // SAFETY: plain Win32 calls on handles opened here and buffers that
+    // outlive them; the SID string is LocalAlloc'd by the conversion and
+    // freed below.
+    unsafe {
+        let mut pid = 0u32;
+        if GetNamedPipeClientProcessId(pipe.as_raw_handle() as HANDLE, &mut pid) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let process = Owned(process);
+        let mut token: HANDLE = 0;
+        if OpenProcessToken(process.0, TOKEN_QUERY, &mut token) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let token = Owned(token);
+        let mut len = 0u32;
+        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut len);
+        if len == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // u64s: TOKEN_USER holds a pointer and wants its alignment.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        if GetTokenInformation(token.0, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut wide: *mut u16 = std::ptr::null_mut();
+        if ConvertSidToStringSidW(user.User.Sid, &mut wide) == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let n = (0..).take_while(|&i| *wide.add(i) != 0).count();
+        let sid = String::from_utf16_lossy(std::slice::from_raw_parts(wide, n));
+        LocalFree(wide as _);
+        Ok(UserId::from_sid(sid))
     }
 }
 
@@ -127,23 +156,31 @@ impl Drop for PipeSecurity {
 }
 
 /// Stream of accepted pipe connections for
-/// `Server::serve_with_incoming_shutdown`.
+/// `Server::serve_with_incoming_shutdown`, each tagged with its user.
 ///
 /// The first instance is created eagerly with `FIRST_PIPE_INSTANCE`, so if
 /// another process is squatting on the name we fail at startup instead of
 /// silently sharing it. After each accept the replacement instance is created
 /// before the connection is yielded, so there is no window with nothing
 /// listening.
-pub fn incoming(name: &'static str) -> io::Result<impl Stream<Item = io::Result<PipeConn>>> {
+pub fn incoming(
+    name: &'static str,
+    users: Arc<Users>,
+) -> io::Result<impl Stream<Item = io::Result<Conn<NamedPipeServer>>>> {
     let mut security = PipeSecurity::new(PIPE_SDDL)?;
     let first = security.create_instance(name, true)?;
 
     Ok(futures_util::stream::unfold(
-        (security, first),
-        move |(mut security, server)| async move {
+        (security, first, users),
+        move |(mut security, server, users)| async move {
             loop {
                 match server.connect().await {
                     Ok(()) => {
+                        // At once, while the client is surely there. One
+                        // that cannot be told is served nothing.
+                        let user = client_user(&server)
+                            .inspect_err(|e| log::warn!("cannot tell the pipe client's user: {e}"))
+                            .ok();
                         // Never yield Err: tonic treats accept errors as
                         // fatal, and a transient instance-creation failure
                         // must not take the whole control server down.
@@ -158,7 +195,8 @@ pub fn incoming(name: &'static str) -> io::Result<impl Stream<Item = io::Result<
                                 }
                             }
                         };
-                        return Some((Ok(PipeConn(server)), (security, next)));
+                        let conn = users.accept(server, user);
+                        return Some((Ok(conn), (security, next, users)));
                     }
                     Err(e) => {
                         log::warn!("pipe accept failed: {e}");

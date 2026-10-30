@@ -2,6 +2,10 @@ syntax = "proto3";
 
 package spora;
 
+// Every call works on the calling Windows user's own state (device
+// identity, relay settings, telemetry, records, logs). The service serves
+// one user at a time: while another user is served, every call fails with
+// PERMISSION_DENIED and a message for the UI to show as it is.
 service Spora {
   rpc Share (ShareRequest) returns (stream ShareEvent);
   rpc Connect (ConnectRequest) returns (stream ConnectEvent);
@@ -38,16 +42,15 @@ message ShareRequest {
   // The share to serve: the blob MakeShare returned (spora-core's
   // Share::to_blob). It must have been made under this device's identity.
   bytes share = 1;
-  // Connection-log control. Logging is ENABLED by default; when these fields
-  // are unset the log lands at %PROGRAMDATA%\Spora\connlog\<routing_hash_hex>\.
+  // Connection-log control. Logging is ENABLED by default, in the calling
+  // user's directory (%PROGRAMDATA%\Spora\users\<SID>\connlog\<routing
+  // hash>\, private to the service).
   bool disable_conn_log = 2;
-  // Override the log directory (used as-is). Empty = the default above.
-  string conn_log_dir = 3;
   // Retention in days. 0 = default (90).
-  uint32 conn_log_retention_days = 4;
+  uint32 conn_log_retention_days = 3;
   // Log sessions only (who was connected and when) without per-flow
   // destination records.
-  bool conn_log_sessions_only = 5;
+  bool conn_log_sessions_only = 4;
 }
 
 message ShareEvent {
