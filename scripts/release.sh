@@ -56,7 +56,14 @@ if [ -n "$(git status --porcelain)" ]; then
   echo
 fi
 
-# --locked: a stale Cargo.lock fails here rather than being rewritten.
+# Cargo.lock must match the manifests. The --locked build would fail on it
+# much later, and cargo pkgid (below) reads the version from Cargo.lock
+# without resolving, so a version bump that left Cargo.lock behind would
+# show the old version here.
+if ! LOCK_ERR=$(cargo metadata --locked --format-version 1 2>&1 >/dev/null); then
+  echo "$LOCK_ERR" >&2
+  die "Cargo.lock does not match the manifests (a version bump changes it too): run cargo check, commit Cargo.lock, and re-run"
+fi
 VERSION=$(cargo pkgid --locked -p spora-winui)
 VERSION=${VERSION##*[#@]}
 TAG="v$VERSION"

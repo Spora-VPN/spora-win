@@ -147,8 +147,9 @@ version resources), NSIS (`makensis`), and curl/unzip; it downloads
 
 ## Release
 
-The version lives in one place, `[workspace.package]` in `Cargo.toml`; it is
-stamped into both exes' version resources, the installer's file properties
+The version lives in one place, `[workspace.package]` in `Cargo.toml`
+(`Cargo.lock` repeats it: run `cargo check` after a bump and commit both,
+or `release.sh` refuses); it is stamped into both exes' version resources, the installer's file properties
 and its Add/Remove Programs entry, and the service log's first line
 (`spora-wincore <version> (release, core <version> <commit>)`).
 `./scripts/release.sh` is the release ceremony, the counterpart of
