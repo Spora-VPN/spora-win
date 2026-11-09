@@ -68,9 +68,12 @@ fn main() {
 /// diagnostic log file (JSON Lines, its own fixed levels, share-link secrets
 /// redacted — what bug reports and uploads carry) plus the human-readable
 /// log as `RUST_LOG` says (default info): `spora-wincore.log` under the SCM,
-/// stderr in console mode unless `--log-file` names a file. The diagnostic
-/// log is the served user's, in their directory (crash files from the
-/// panic hook beside it): none until a user is served (see `users.rs`).
+/// stderr in console mode unless `--log-file` names a file. The
+/// human-readable log has share-link secrets redacted too, and a file of it
+/// rotates at 1 MiB with three old files kept (`spora-winlog`). The
+/// diagnostic log is the served user's, in their directory (crash files
+/// from the panic hook beside it): none until a user is served (see
+/// `users.rs`).
 fn init_logging(log_file: Option<String>, service_mode: bool) {
     use spora_service::diag::{self, Secondary};
 
@@ -99,19 +102,18 @@ fn init_logging(log_file: Option<String>, service_mode: bool) {
         .map(std::path::PathBuf::from)
         .or_else(|| service_mode.then(paths::service_log));
     let mut file_error = None;
-    if let Some(p) = &path {
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-        {
-            Ok(file) => {
-                builder.target(env_logger::Target::Pipe(Box::new(file)));
-            }
+    let file = path.as_deref().and_then(|p| {
+        spora_winlog::open(p)
             // A logging failure must not keep the service from starting.
-            Err(e) => file_error = Some(format!("failed to open log file {}: {e}", p.display())),
-        }
-    }
+            .inspect_err(|e| {
+                file_error = Some(format!("failed to open log file {}: {e}", p.display()))
+            })
+            .ok()
+    });
+    builder.target(env_logger::Target::Pipe(match file {
+        Some(file) => Box::new(file),
+        None => Box::new(spora_winlog::Redacted::new(std::io::stderr())),
+    }));
     let secondary = builder.build();
     let level = secondary.filter();
 

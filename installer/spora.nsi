@@ -13,6 +13,7 @@
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 
 ; ── General ──────────────────────────────────────────────────────────
 
@@ -53,12 +54,20 @@ VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 The Spora authors. GPL-3.0.
 !define MUI_FINISHPAGE_RUN_TEXT "Launch Spora"
 !insertmacro MUI_PAGE_FINISH
 
+; Leaving the confirm page asks whether to delete Spora's data too.
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.AskDeleteData
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
 
 ; ── Install Sections ─────────────────────────────────────────────────
+
+; Upgrades and reinstalls install over what is there: they stop the service,
+; replace the files, refresh the service's configuration and write a new
+; uninstaller. They never run the old uninstaller, and nothing here deletes
+; Spora's data (see "Spora's data" below). A future installer that does run
+; the old uninstaller must run it silently and without /DELETEDATA.
 
 Section "Spora (required)" SecMain
     SectionIn RO
@@ -202,6 +211,51 @@ SectionEnd
 
 ; ── Uninstaller ──────────────────────────────────────────────────────
 
+; Spora's data stays unless the uninstall is asked to delete it: an
+; interactive uninstall asks (default Yes) when its confirm page is left; a
+; silent one (/S) keeps it unless run with /DELETEDATA, which also skips
+; the question in an interactive one:
+;
+;   uninstall.exe /S               keep the data
+;   uninstall.exe /S /DELETEDATA   delete it
+Var DeleteData
+
+Function un.onInit
+    StrCpy $DeleteData 0
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "/DELETEDATA" $R1
+    ${IfNot} ${Errors}
+        StrCpy $DeleteData 1
+    ${EndIf}
+FunctionEnd
+
+Function un.AskDeleteData
+    ${If} $DeleteData == 1
+        Return
+    ${EndIf}
+    MessageBox MB_YESNOCANCEL|MB_ICONQUESTION|MB_DEFBUTTON1 \
+        "Also delete Spora's data from this computer?$\r$\n$\r$\n\
+Yes deletes, for every Windows user of this computer:$\r$\n\
+- the device identity: share links you gave out stop working for good;$\r$\n\
+- saved connections, relay settings and telemetry settings;$\r$\n\
+- the connection logs of your shares, which record what was reached \
+through them and when. You may need them to answer an abuse report about \
+traffic that went through your connection;$\r$\n\
+- diagnostic logs, connection records, crash reports and the app's own \
+logs.$\r$\n$\r$\n\
+No keeps all of it for a later reinstall. Reports you saved yourself are \
+not touched." \
+        /SD IDNO IDYES ask_delete IDNO ask_keep
+    ; Cancel: back to the confirm page.
+    Abort
+    ask_delete:
+        StrCpy $DeleteData 1
+        Return
+    ask_keep:
+        StrCpy $DeleteData 0
+FunctionEnd
+
 Section "Uninstall"
     ; Kill the UI, then clear failure actions before stopping so nothing
     ; auto-restarts wincore between stop and delete, then remove the service.
@@ -254,4 +308,97 @@ Section "Uninstall"
     DeleteRegKey HKLM "Software\Classes\spora"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Spora"
     DeleteRegKey HKLM "Software\Spora"
+    ; The UI's toast registration (src/toast.rs), the running user's only:
+    ; other users' registry hives are not loaded. The UI makes it again.
+    SetRegView 64
+    DeleteRegKey HKCU "Software\Classes\AppUserModelId\Spora.Client"
+    SetRegView default
+
+    ; Last, with the service and the UI gone, nothing holds their files.
+    ${If} $DeleteData == 1
+        Call un.DeleteData
+    ${Else}
+        DetailPrint "Kept Spora's data (%ProgramData%\Spora and each user's AppData)."
+    ${EndIf}
 SectionEnd
+
+; ── Spora's data ─────────────────────────────────────────────────────
+;
+; What Spora keeps, all of it deleted by un.DeleteData:
+; - the service's, for every Windows user: %ProgramData%\Spora. Each user's
+;   device identity, relay and telemetry settings, connection logs,
+;   connection records, diagnostic log and crash files under
+;   users\<SID>\ (directly under Spora\ in earlier versions), and the
+;   service log spora-wincore.log*. Nothing else writes there.
+; - the UI's, per Windows user: %APPDATA%\spora\config\connections.json*
+;   (the saved connections, the shares' secrets among them) and
+;   %LOCALAPPDATA%\Spora\spora-winui.log* (spora-wincore.log* too, from
+;   versions before the service). Only those files: the spora CLI keeps its
+;   own share (%APPDATA%\spora\share.bin) and state (%LOCALAPPDATA%\spora\)
+;   in the same folders, and is not this installer's to delete. A folder
+;   goes only when nothing else is left in it.
+; Diagnostic reports the user saved (Downloads\spora-report-*.zip) are theirs.
+;
+; The uninstaller runs elevated, as whoever approved the elevation: its
+; $APPDATA and $LOCALAPPDATA are that user's, wherever they are redirected.
+; Every other profile on the machine (ProfileList) is cleaned at the default
+; AppData locations under its profile folder; a roaming profile's server
+; copy and AppData redirected elsewhere are out of reach.
+
+!define PROFILE_LIST "SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+
+Function un.DeleteData
+    DetailPrint "Deleting Spora's data..."
+    ReadEnvStr $R0 "ProgramData"
+    ${If} $R0 == ""
+        SetShellVarContext all
+        StrCpy $R0 "$APPDATA"
+        SetShellVarContext current
+    ${EndIf}
+    ${If} $R0 != ""
+        RMDir /r "$R0\Spora"
+        ${If} ${FileExists} "$R0\Spora\*.*"
+            DetailPrint "Could not delete all of $R0\Spora: some files are in use."
+        ${EndIf}
+    ${EndIf}
+
+    Push "$LOCALAPPDATA"
+    Push "$APPDATA"
+    Call un.DeleteUserData
+
+    SetRegView 64
+    StrCpy $R1 0
+    ${Do}
+        ClearErrors
+        EnumRegKey $R2 HKLM "${PROFILE_LIST}" $R1
+        ${If} ${Errors}
+        ${OrIf} $R2 == ""
+            ${Break}
+        ${EndIf}
+        IntOp $R1 $R1 + 1
+        ReadRegStr $R3 HKLM "${PROFILE_LIST}\$R2" "ProfileImagePath"
+        ${If} $R3 != ""
+            ExpandEnvStrings $R3 "$R3"
+            Push "$R3\AppData\Local"
+            Push "$R3\AppData\Roaming"
+            Call un.DeleteUserData
+        ${EndIf}
+    ${Loop}
+    SetRegView default
+FunctionEnd
+
+; One user's UI files. Stack: roaming AppData on top, local AppData below.
+Function un.DeleteUserData
+    Pop $R8
+    Pop $R9
+    ${If} $R8 != ""
+        Delete "$R8\spora\config\connections.json*"
+        RMDir "$R8\spora\config"
+        RMDir "$R8\spora"
+    ${EndIf}
+    ${If} $R9 != ""
+        Delete "$R9\Spora\spora-winui.log*"
+        Delete "$R9\Spora\spora-wincore.log*"
+        RMDir "$R9\Spora"
+    ${EndIf}
+FunctionEnd

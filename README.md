@@ -30,6 +30,14 @@ This needs the mingw toolchain (`x86_64-w64-mingw32-windres`), NSIS (`makensis`)
 
 A build on Windows uses Spora's production API unless the service's environment sets `SPORA_API`, for example to `http://127.0.0.1:9` (answers nothing).
 
+## Uninstalling
+
+The uninstaller asks whether to delete Spora's data as well: the device identity and settings, the saved connections, the connection logs of your shares, and the diagnostic logs and records, for every Windows user of the computer. Upgrading never touches that data. A silent uninstall (`/S`) keeps it; add `/DELETEDATA` to delete it too:
+
+```bat
+"%ProgramFiles%\Spora\uninstall.exe" /S /DELETEDATA
+```
+
 ## License
 
 [GPL-3.0](LICENSE), with an additional permission for combining Spora with Wintun: see [NOTICE](NOTICE), which also lists what the installer bundles.

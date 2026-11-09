@@ -1,0 +1,11 @@
+[package]
+name = "spora-winlog"
+version.workspace = true
+license.workspace = true
+publish = false
+edition = "2024"
+
+# The human-readable log files of both executables (spora-winui.log,
+# spora-wincore.log): share-link secrets redacted, size-capped with rotation.
+# Std only: the UI links it too, and the UI links nothing of the core.
+[dependencies]

@@ -6144,6 +6144,7 @@ dependencies = [
  "spora-core",
  "spora-service",
  "spora-vpn",
+ "spora-winlog",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -6154,6 +6155,10 @@ dependencies = [
  "windows-sys 0.52.0",
  "winresource",
 ]
+
+[[package]]
+name = "spora-winlog"
+version = "0.3.2"
 
 [[package]]
 name = "spora-winui"
@@ -6172,6 +6177,7 @@ dependencies = [
  "serde_json",
  "slint",
  "slint-build",
+ "spora-winlog",
  "tauri-winrt-notification",
  "tokio",
  "tonic",

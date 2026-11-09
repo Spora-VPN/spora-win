@@ -1,5 +1,5 @@
 [workspace]
-members = ["spora-wincore", "spora-winui"]
+members = ["spora-wincore", "spora-winui", "spora-winlog"]
 resolver = "3"
 
 # The client's release version: stamped into both executables' version

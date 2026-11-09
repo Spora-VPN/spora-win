@@ -12,7 +12,11 @@
 //!     being streamed to the UI;
 //!   - `connlog\<routing hash>\` — each share's connection log.
 //! - `spora-wincore.log` — the human-readable service log (every user's
-//!   sessions; it never leaves the machine).
+//!   sessions; it never leaves the machine), share-link secrets redacted,
+//!   rotated to `spora-wincore.log.1` .. `.3` at 1 MiB (`spora-winlog`).
+//!
+//! The uninstaller deletes all of it when asked to (installer/spora.nsi);
+//! an upgrade never does.
 //!
 //! None of it may be backed up and restored onto another machine: a restored
 //! device token would clone a device (the DPAPI key does not open elsewhere,

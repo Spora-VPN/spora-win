@@ -373,8 +373,8 @@ impl Spora for SporaService {
     ) -> Result<Response<Self::ConnectStream>, Status> {
         let backend = self.users.enter(&request).await?;
         let url_str = request.into_inner().url;
-        // Not the URL itself: it carries the share's secret, and this log
-        // (unlike the diagnostic log) is not redacted.
+        // Not the URL itself: it carries the share's secret. Both logs
+        // redact it, but no log line should need that.
         info!("gRPC Connect()");
 
         let url = Url::parse(&url_str).map_err(|_| Status::invalid_argument("invalid URL"))?;

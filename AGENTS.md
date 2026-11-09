@@ -4,7 +4,7 @@ Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
 `../spora` repo (this repo was extracted from it in July 2026 with history via
 `git filter-repo`). The repo is public, GPL-3.0 like the core: keep hosts, IP
 addresses, credentials and anything from private repos or notes out of its
-code, docs and commit messages. Two crates:
+code, docs and commit messages. Three crates:
 
 - **spora-wincore** — Windows service (`Spora`, auto-start, installed by the
   NSIS installer; `--service` runs the SCM entry point, without it wincore
@@ -26,13 +26,16 @@ code, docs and commit messages. Two crates:
   a time (see "Relays, shares and telemetry" below). Each user's connection
   logs live under `%PROGRAMDATA%\Spora\users\<SID>\connlog\<routing hash>`
   (proto fields control it); human-readable service log at
-  `%PROGRAMDATA%\Spora\spora-wincore.log`. All of `%PROGRAMDATA%\Spora` is
-  SYSTEM and Administrators only.
+  `%PROGRAMDATA%\Spora\spora-wincore.log` (through `spora-winlog`). All of
+  `%PROGRAMDATA%\Spora` is SYSTEM and Administrators only.
 - **spora-winui** — Slint desktop UI. Pure gRPC client of wincore — no
   dependency on spora-core; its `build.rs` compiles
   `../spora-wincore/proto/spora.proto`. Runs unelevated; connects to the
   service's named pipe (on Linux dev it spawns wincore itself and uses TCP).
-  Registers/handles the `spora:` URI scheme; single-instance. The UI is the
+  Registers/handles the `spora:` URI scheme; single-instance. Its own files
+  are the user's: the saved connections in
+  `%APPDATA%\spora\config\connections.json` and its log,
+  `%LOCALAPPDATA%\Spora\spora-winui.log` (through `spora-winlog`). The UI is the
   "master-detail instrument" from the Windows design canvas (claude.ai design
   project `Spora Windows.dc.html`, built on the Spora design system): the
   sidebar is the connection list (shape-coded status: ● active, ○ pending,
@@ -60,6 +63,16 @@ code, docs and commit messages. Two crates:
   seeds every UI state without touching the service or the saved
   connections, and `SPORA_UI_DEMO_FLYOUT=1|only` opens the flyout, for
   screenshot matrices.
+- **spora-winlog** — the human-readable log files of both executables
+  (`spora-wincore.log`, `spora-winui.log`), std only so the UI can link it:
+  env_logger writes through `spora_winlog::open`, which redacts share-link
+  secrets from every line (the rule of spora-service's diagnostic log, whose
+  function is private to that crate: `/s/` plus 40 or more base64url
+  characters, either case, JSON-escaped or percent-encoded slashes, and
+  here `spora:s/` too; keep the two in step) and rotates the file at 1 MiB
+  to `<name>.1` .. `.3`. A file left by an older version is cut to its last
+  MiB and redacted when opened. wincore's console-mode stderr is redacted
+  too.
 
 ## Relays, shares and telemetry
 
@@ -123,8 +136,9 @@ telemetry"). The Android client (`../spora-android`) is the reference UI.
   saves it to the user's Downloads (Settings › Telemetry › SAVE REPORT). The
   account's force flag refuses a switch-off (`refused_required`) and the UI
   shows the agreed notice (also once when the service says it is pending,
-  then acknowledges it). Never log a share URL: the human-readable log is
-  not redacted.
+  then acknowledges it). Never log a share URL: the human-readable logs
+  redact share-link secrets (`spora-winlog`), but that is a safety net, not
+  leave to log one.
 - **Never contact production from development.** The API is `SPORA_API`
   (comma-separated, as the CLI reads it) from the service's environment,
   else the built-in production API on Windows; Linux dev builds without it
@@ -132,6 +146,44 @@ telemetry"). The Android client (`../spora-android`) is the reference UI.
   the service's registry `Environment` (`HKLM\SYSTEM\CurrentControlSet\
   Services\Spora`, REG_MULTI_SZ `SPORA_API=...`) before deploying a build
   that will register.
+
+## Data and uninstall
+
+Everything Spora keeps on a Windows machine:
+
+- The service's, for every Windows user: `%ProgramData%\Spora` — per user
+  under `users\<SID>\` (device identity and `service.json`, `state.key`,
+  `relays.json`, the diagnostic log and crash files, connection records,
+  report zips in transit, the connection logs), plus `spora-wincore.log*`.
+  Versions before the per-user layout kept `service\`, `diag\`,
+  `records\`, `reports\` and `connlog\` directly under it.
+- The UI's, per Windows user: `%APPDATA%\spora\config\connections.json`
+  (`.bak` after a parse failure; it holds the share blobs, secrets
+  included) and `%LOCALAPPDATA%\Spora\spora-winui.log*` (and
+  `spora-wincore.log*` from versions before the service, when the UI ran
+  wincore itself). The toast registration
+  `HKCU\Software\Classes\AppUserModelId\Spora.Client`.
+- Not ours: the spora CLI keeps its share in `%APPDATA%\spora\share.bin`
+  and its state in `%LOCALAPPDATA%\spora\` — the same two folders — and
+  reports the user saved (`Downloads\spora-report-*.zip`) are theirs.
+
+The installer (`installer/spora.nsi`) upgrades and reinstalls in place: it
+stops the service, replaces the files and writes a new uninstaller; it never
+runs the old uninstaller and never deletes data. The uninstaller always
+removes the program, the service, the shortcuts, the registry entries and
+the running user's toast registration. Spora's data goes only when asked:
+an interactive uninstall asks when its confirm page is left (Yes, the
+default, deletes; No keeps; Cancel goes back), saying what the data
+includes, the connection logs a sharer may need for an abuse report among
+it; a silent one (`/S`) keeps it unless run with `/DELETEDATA`, which also
+skips the question in an interactive one. Deleting removes all of
+`%ProgramData%\Spora` and, for the elevating user (their `$APPDATA` /
+`$LOCALAPPDATA`) and every profile in `ProfileList` (at the default
+`AppData` paths), only the UI's files above, then their folders if empty,
+so the CLI's files survive. Out of reach: a roaming profile's server copy,
+other users' AppData redirected elsewhere, and other users' toast
+registration (their hives are not loaded). A future installer that runs the
+old uninstaller on upgrade must run it silently and without `/DELETEDATA`.
 
 ## Build
 

@@ -1174,7 +1174,8 @@ fn dialog_save(ctx: &Ctx, app: &AppWindow, url: &str, name: &str) {
 /// A `spora:` link arrived (command line or a second instance): a known
 /// link is selected and connected; an unknown one opens the dialog prefilled.
 fn handle_incoming_url(ctx: &Ctx, app: &AppWindow, url: &str) {
-    log::info!("Handling incoming URL: {url}");
+    // Not the URL: it carries the share's secret.
+    log::info!("Handling an incoming link");
     show_main(app);
     let mut s = ctx.lock();
     s.creating = None;
@@ -1359,13 +1360,12 @@ fn main() {
         }
     };
 
+    // Share-link secrets redacted, rotated at 1 MiB with three old files
+    // kept (spora-winlog). Still, never log a share URL on purpose.
     let log_dir = log_dir();
     std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
-    let log_file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("spora-winui.log"))
-        .expect("failed to open log file");
+    let log_file =
+        spora_winlog::open(&log_dir.join("spora-winui.log")).expect("failed to open log file");
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .target(env_logger::Target::Pipe(Box::new(log_file)))
         .init();
