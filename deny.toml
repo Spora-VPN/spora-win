@@ -1,0 +1,43 @@
+# cargo deny check: licences, advisories, bans and sources (CI's `deny` job).
+# The core's deny.toml plus GPL-3.0-only, which Slint (one of its three
+# licence options) and the core's own crates come under.
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA bundle data)
+    "GPL-3.0-only",        # the core's crates; Slint's GPL option
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "NCSA",                # libfuzzer-sys, via Slint's image decoders (rav1e)
+    "Unicode-3.0",         # ICU4X crates
+    "Unlicense",
+    "Zlib",
+]
+private = { ignore = true }
+
+[advisories]
+yanked = "warn"
+# Unmaintained crates count only when this workspace depends on them
+# directly: the transitive ones (Slint's text and font stack, zbus) are
+# Slint's to replace.
+unmaintained = "workspace"
+ignore = [
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 only via wayland-scanner, a Linux build-time macro reading Wayland's own protocol files; no 0.38 fix" },
+    { id = "RUSTSEC-2026-0195", reason = "as RUSTSEC-2026-0194" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

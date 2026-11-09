@@ -1,0 +1,30 @@
+Spora for Windows
+Copyright (C) 2026 The Spora authors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of version 3 of the GNU General Public License as published
+by the Free Software Foundation (see LICENSE).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+
+Additional permission under GNU GPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it
+with Wintun (wintun.dll, https://www.wintun.net/), containing parts covered
+by the terms of the Wintun Prebuilt Binaries License, the licensors of this
+Program grant you additional permission to convey the resulting work.
+
+
+Bundled third-party components
+
+- Wintun (wintun.dll), by WireGuard LLC, under the Wintun Prebuilt Binaries
+  License. Not in this repository: build-winui.sh downloads it, checks it
+  against a pinned SHA-256 and puts it, unmodified, in the installer, with its
+  license as licenses\wintun-LICENSE.txt.
+- IBM Plex Sans and IBM Plex Mono, by IBM Corp., under the SIL Open Font
+  License 1.1 (spora-winui/ui/fonts/OFL.txt), compiled into spora-winui.exe.
+- Slint, by SixtyFPS GmbH, used under its GPL-3.0 option, and the other Rust
+  crates listed in Cargo.lock, each under its own license.

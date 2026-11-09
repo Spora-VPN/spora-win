@@ -18,6 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .set_icon("../assets/spora.ico")
             .set("ProductName", "Spora")
             .set("FileDescription", "Spora")
+            .set("LegalCopyright", "Copyright (C) 2026 The Spora authors. GPL-3.0.")
             .compile()?;
     }
     Ok(())

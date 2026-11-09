@@ -2,7 +2,9 @@
 
 Windows desktop client for Spora, the P2P VPN whose core lives in the sibling
 `../spora` repo (this repo was extracted from it in July 2026 with history via
-`git filter-repo`). Two crates:
+`git filter-repo`). The repo is public, GPL-3.0 like the core: keep hosts, IP
+addresses, credentials and anything from private repos or notes out of its
+code, docs and commit messages. Two crates:
 
 - **spora-wincore** — Windows service (`Spora`, auto-start, installed by the
   NSIS installer; `--service` runs the SCM entry point, without it wincore
@@ -145,6 +147,15 @@ version resources), NSIS (`makensis`), and curl/unzip; it downloads
 `wintun.dll` verified against a pinned SHA-256 and writes the installer to
 `~/winshare/spora-installer.exe` (`--out` elsewhere).
 
+Licences: `LICENSE` is GPL-3.0; `NOTICE` adds the GPLv3 section 7 permission
+for Wintun (the core's `NOTICE` grants the same) and lists what the installer
+bundles. The installer puts `LICENSE`, `NOTICE`, Wintun's licence (taken from
+the same verified zip as the DLL) and IBM Plex's OFL (`ui/fonts/OFL.txt`) in
+`$INSTDIR\licenses`. Anything new the installer or the exes bundle outside
+Cargo gets its licence added there and a line in `NOTICE`. CI runs
+`cargo deny` (`deny.toml`, the core's list plus GPL-3.0 for Slint and the
+core crates).
+
 ## Release
 
 The version lives in one place, `[workspace.package]` in `Cargo.toml`
@@ -166,7 +177,9 @@ laptop, and upload through the website admin. No code signing yet.
 test laptop over SSH, launches it on that machine's desktop and brings back
 screenshots, the UI Automation tree and logs (`wt deploy`, `wt run`,
 `wt shot`, `wt tree`, `wt click`, `wt tray`, `wt shot --flyout`, ...);
-`wt peer-share` runs a sharer on a Linux host for real connect flows.
+`wt peer-share` runs a sharer on a Linux peer for real connect flows. The
+hosts (`WT_HOST`, `WT_PEER`) come from the environment or
+`~/.config/spora-wintest/env`, never from the repo.
 `wt vnc` mirrors the box's console desktop over an SSH-tunnelled, loopback-only
 TightVNC for hands-on testing -- VNC rather than RDP because RDP would detach
 the console session the whole agent depends on (and the box is Windows Home).

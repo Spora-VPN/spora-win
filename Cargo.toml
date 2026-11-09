@@ -7,3 +7,4 @@ resolver = "3"
 # Programs entry. scripts/release.sh builds, verifies and tags from it.
 [workspace.package]
 version = "0.3.2"
+license = "GPL-3.0-only"

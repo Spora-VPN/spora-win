@@ -56,9 +56,11 @@ mkdir -p "$STAGING"
 WINUI_EXE="$(pwd)/target/$TARGET/release/spora-winui.exe"
 WINCORE_EXE="$(pwd)/target/$TARGET/release/spora-wincore.exe"
 WINTUN_DLL="$(pwd)/$STAGING/wintun.dll"
+# Wintun's licence, from the same verified zip; it ships next to the DLL.
+WINTUN_LICENSE="$(pwd)/$STAGING/wintun-LICENSE.txt"
 
-# Download wintun.dll if not already staged
-if [ ! -f "$WINTUN_DLL" ]; then
+# Download wintun.dll (and its licence) if not already staged
+if [ ! -f "$WINTUN_DLL" ] || [ ! -f "$WINTUN_LICENSE" ]; then
     echo ":: Downloading wintun.dll..."
     TMPDIR=$(mktemp -d)
     curl -fsSL "$WINTUN_URL" -o "$TMPDIR/wintun.zip"
@@ -71,6 +73,7 @@ if [ ! -f "$WINTUN_DLL" ]; then
     fi
     unzip -qo "$TMPDIR/wintun.zip" -d "$TMPDIR/wintun"
     cp "$TMPDIR/wintun/wintun/bin/amd64/wintun.dll" "$WINTUN_DLL"
+    cp "$TMPDIR/wintun/wintun/LICENSE.txt" "$WINTUN_LICENSE"
     rm -rf "$TMPDIR"
 else
     echo ":: wintun.dll already staged, skipping download"
@@ -91,6 +94,18 @@ fi
 ICON="$(pwd)/assets/spora.ico"
 [ -f "$ICON" ] || { echo ":: ERROR: $ICON missing" >&2; exit 1; }
 
+# ── Licences ──────────────────────────────────────────────────────────
+
+# Everything in this directory lands in $INSTDIR\licenses; rebuilt every time
+# so nothing stale ships.
+LICENSES="$(pwd)/$STAGING/licenses"
+rm -rf "$LICENSES"
+mkdir -p "$LICENSES"
+cp LICENSE "$LICENSES/LICENSE.txt"
+cp NOTICE "$LICENSES/NOTICE.txt"
+cp spora-winui/ui/fonts/OFL.txt "$LICENSES/IBM-Plex-OFL.txt"
+cp "$WINTUN_LICENSE" "$LICENSES/wintun-LICENSE.txt"
+
 # ── Build installer ───────────────────────────────────────────────────
 
 mkdir -p "$(dirname "$OUTFILE")"
@@ -102,6 +117,7 @@ makensis -V2 \
     -DWINCORE_EXE="$WINCORE_EXE" \
     -DWINTUN_DLL="$WINTUN_DLL" \
     -DICON_FILE="$ICON" \
+    -DLICENSES_DIR="$LICENSES" \
     -DOUTFILE_PATH="$OUTFILE" \
     installer/spora.nsi
 

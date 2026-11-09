@@ -5,13 +5,8 @@ on:
     branches: [main, ci]
   pull_request:
 
-# Each job ends by force-pushing an empty ref whose NAME encodes
-# run id + job + status (ci-result/<run>/<job>/<status>). This repo is
-# private and the dev machine has no GitHub API token, so `git ls-remote`
-# over SSH is how CI outcomes are read from there. The refs are ephemeral;
-# delete them freely.
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,7 +25,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: spora-win
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Read pinned core ref
         id: core
@@ -40,9 +35,10 @@ jobs:
       # resolves; pinned via .github/core-ref for reproducibility.
       - uses: actions/checkout@v7
         with:
-          repository: atereshkin/spora
+          repository: Spora-VPN/spora
           ref: ${{ steps.core.outputs.ref }}
           path: spora
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -67,10 +63,6 @@ jobs:
       - run: cargo check --workspace
       - run: cargo clippy --workspace
 
-      - name: Report result
-        if: always()
-        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}
-
   # The real build: compiles the cfg(windows) code (service, wintun, named
   # pipes) natively with msvc. wintun.dll is loaded at runtime, so building
   # and clippy need no driver bits.
@@ -84,7 +76,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: spora-win
-          persist-credentials: true
+          persist-credentials: false
 
       - name: Read pinned core ref
         id: core
@@ -93,9 +85,10 @@ jobs:
 
       - uses: actions/checkout@v7
         with:
-          repository: atereshkin/spora
+          repository: Spora-VPN/spora
           ref: ${{ steps.core.outputs.ref }}
           path: spora
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -113,6 +106,31 @@ jobs:
       - run: cargo build --workspace
       - run: cargo clippy --workspace
 
-      - name: Report result
-        if: always()
-        run: git push -f origin HEAD:refs/heads/ci-result/${{ github.run_id }}/${{ github.job }}/${{ job.status }}
+  # Licences / advisories / bans / sources (config: deny.toml), as in the
+  # core. A new RUSTSEC advisory can turn this red without a code change --
+  # that is intentional. The core sits beside the client, as for the builds,
+  # because its crates are part of the graph.
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: spora-win
+          persist-credentials: false
+
+      - name: Read pinned core ref
+        id: core
+        working-directory: spora-win
+        run: echo "ref=$(grep -v '^#' .github/core-ref | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: Spora-VPN/spora
+          ref: ${{ steps.core.outputs.ref }}
+          path: spora
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: spora-win/Cargo.toml

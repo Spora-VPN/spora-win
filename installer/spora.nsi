@@ -4,6 +4,8 @@
 ;   WINCORE_EXE - path to spora-wincore.exe
 ;   WINTUN_DLL - path to wintun.dll
 ;   ICON_FILE   - path to spora.ico
+;   LICENSES_DIR - directory of the .txt licence files installed under
+;                 $INSTDIR\licenses (Spora's own, Wintun's, IBM Plex's)
 ;   OUTFILE_PATH - output installer exe path
 ;   VERSION     - release version (the workspace version, e.g. 0.2.1)
 ;   VERSION_NUMERIC - the same as four numeric fields (0.2.1.0) for
@@ -27,15 +29,13 @@ RequestExecutionLevel admin
     !error "VERSION_NUMERIC must be defined (build with build-winui.sh)"
 !endif
 
-; The installer's own file properties (Explorer's Details tab). No
-; LegalCopyright until the client has a licence of its own; silence the
-; "without standard key" warning that leaves.
-!pragma warning disable 9100
+; The installer's own file properties (Explorer's Details tab).
 VIProductVersion "${VERSION_NUMERIC}"
 VIAddVersionKey "ProductName" "Spora"
 VIAddVersionKey "FileDescription" "Spora Setup"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
+VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 The Spora authors. GPL-3.0."
 
 ; ── Interface ────────────────────────────────────────────────────────
 
@@ -108,6 +108,13 @@ Section "Spora (required)" SecMain
     File "${WINCORE_EXE}"
     File "${WINTUN_DLL}"
     File "${ICON_FILE}"
+
+    ; Licences: Spora's (GPL-3.0 + NOTICE), and those of what it bundles
+    ; (wintun.dll, the IBM Plex fonts compiled into the UI). Back to $INSTDIR
+    ; afterwards: the shortcuts below take $OUTDIR as their working directory.
+    SetOutPath "$INSTDIR\licenses"
+    File "${LICENSES_DIR}\*.txt"
+    SetOutPath "$INSTDIR"
 
     ; Install (or refresh) the spora-wincore Windows service. The binPath must
     ; embed backslash-escaped quotes around the exe path so sc.exe stores an
@@ -233,6 +240,7 @@ Section "Uninstall"
     Delete "$INSTDIR\spora-wincore.exe"
     Delete "$INSTDIR\wintun.dll"
     Delete "$INSTDIR\spora.ico"
+    RMDir /r "$INSTDIR\licenses"
     Delete "$INSTDIR\uninstall.exe"
     RMDir "$INSTDIR"
 

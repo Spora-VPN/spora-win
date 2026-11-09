@@ -5,8 +5,12 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-HOST=${WT_HOST:-user@windows-box}          # Windows test box (ssh, PowerShell shell)
-PEER=${WT_PEER:-root@sharer-peer}           # sharer peer
+# The two hosts come from the environment, else from KEY=VALUE lines in
+# $WT_CONFIG; there are no defaults.
+WT_CONFIG=${WT_CONFIG:-$HOME/.config/spora-wintest/env}
+cfg() { [ -r "$WT_CONFIG" ] || return 0; sed -n "s/^$1=//p" "$WT_CONFIG" | tail -1; }
+HOST=${WT_HOST:-$(cfg WT_HOST)}               # Windows test box (ssh, PowerShell shell)
+PEER=${WT_PEER:-$(cfg WT_PEER)}               # sharer peer: Linux, ssh as root
 TARGET=x86_64-pc-windows-gnu
 WROOT='C:\SporaTest'                          # PowerShell spelling
 WROOT_SCP='C:/SporaTest'                      # scp spelling
@@ -20,9 +24,11 @@ VNC_PWFILE=${WT_VNC_PWFILE:-$HOME/.config/spora-wintest/vnc-password}
 VNC_PIDFILE=$CM_DIR/wt-vnc-tunnel.pid
 
 die()  { echo "wt: $*" >&2; exit 1; }
-wssh() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
-wscp() { scp "${SSH_OPTS[@]}" "$@"; }
-pssh() { ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR "$PEER" "$@"; }
+need_host() { [ -n "$HOST" ] || die "no Windows box: set WT_HOST=user@host (or put WT_HOST=... in $WT_CONFIG)"; }
+need_peer() { [ -n "$PEER" ] || die "no sharer peer: set WT_PEER=root@host (or put WT_PEER=... in $WT_CONFIG)"; }
+wssh() { need_host; ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
+wscp() { need_host; scp "${SSH_OPTS[@]}" "$@"; }
+pssh() { need_peer; ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR "$PEER" "$@"; }
 # Run one of the win/ scripts (already copied to C:\SporaTest) in the SSH
 # session. That session is elevated (Administrators get a full token over
 # Windows OpenSSH) but lives in session 0: fine for services and files, blind
@@ -60,6 +66,7 @@ vnc_tunnel_live() {
 }
 vnc_tunnel_up() {
   vnc_tunnel_live && { echo "tunnel already up (pid $(cat "$VNC_PIDFILE")): localhost:$VNC_PORT"; return 0; }
+  need_host
   # ExitOnForwardFailure: never leave a half-open tunnel that silently points
   # at whatever else owns the local port (a local x11vnc on 5900, say).
   ssh -o BatchMode=yes -o ConnectTimeout=15 -o LogLevel=ERROR -o ExitOnForwardFailure=yes \
@@ -77,7 +84,10 @@ usage() {
   cat <<'USAGE'
 usage: wt <command> [args]
 
-Windows box (WT_HOST, default user@windows-box):
+Hosts: WT_HOST and WT_PEER from the environment, else WT_HOST=... and
+WT_PEER=... lines in ~/.config/spora-wintest/env (WT_CONFIG moves it).
+
+Windows box (WT_HOST, user@host):
   setup                    copy win/*.ps1 over, register+start the desktop agent task, disable display/standby timeouts
   push                     copy win/*.ps1 over only (lib/submit/deploy changes take effect at once)
   status                   service, processes, installed exe timestamps, agent heartbeat
@@ -110,7 +120,7 @@ Windows box (WT_HOST, default user@windows-box):
                            mirror the box's console desktop over VNC through an SSH tunnel
                            (no args = tunnel + viewer); see README "Watching the desktop"
 
-Sharer peer (WT_PEER, default root@sharer-peer):
+Sharer peer (WT_PEER, root@host: a Linux machine with systemd):
   peer-push [--build]      copy the musl spora-cli (optionally rebuilt) to /root/wintest/ on the peer
   peer-share [ARGS]        (re)start `spora-cli share --json ARGS` as a transient systemd unit, print the share URL
   peer-url | peer-log [N] | peer-stop

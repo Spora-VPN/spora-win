@@ -21,13 +21,16 @@ wt shot name --flyout     # PNG of the flyout window
 wt toasts                 # toasts the client delivered (Action Center history)
 wt log [--ui|--core]      # service log (%PROGRAMDATA%\Spora) and UI log (%LOCALAPPDATA%\Spora)
 wt vnc                    # mirror the box's desktop over VNC (SSH-tunnelled); wt vnc install sets it up
-wt peer-share             # sharer on the lab node, prints the spora URL to feed `wt run`
+wt peer-share             # sharer on the peer, prints the spora URL to feed `wt run`
 wt help                   # everything else
 ```
 
-Hosts come from `WT_HOST` (default `user@windows-box`, Windows 11 Home,
-PowerShell 5.1 as the SSH shell, user in Administrators) and `WT_PEER`
-(default `root@sharer-peer`). Screenshots land under `target/wintest/shots/`.
+Two hosts, with no defaults: `WT_HOST`, the Windows box (`user@host`; Windows
+11 Home here, PowerShell 5.1 as the SSH shell, the user in Administrators), and
+`WT_PEER`, the sharer peer (`root@host`, any Linux machine with systemd). Set
+them in the environment or as `WT_HOST=...` and `WT_PEER=...` lines in
+`~/.config/spora-wintest/env` (`WT_CONFIG` moves that file); the environment
+wins. Screenshots land under `target/wintest/shots/`.
 
 ## How it works
 

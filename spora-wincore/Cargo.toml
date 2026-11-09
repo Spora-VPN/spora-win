@@ -1,6 +1,8 @@
 [package]
 name = "spora-wincore"
 version.workspace = true
+license.workspace = true
+publish = false
 edition = "2024"
 
 [dependencies]
