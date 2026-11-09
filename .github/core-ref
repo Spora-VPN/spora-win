@@ -3,4 +3,4 @@
 # (../../spora/spora-core, ../../spora/spora-vpn), so ci.yml checks the core
 # repo out as a sibling at exactly this ref. Bump it when the client needs
 # newer core APIs.
-8193d9876b00c9044808e6e2d72e6b9ea0a3e17b
+fc9ad6fe92b8af33f826638ac59736ffe74894fb

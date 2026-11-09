@@ -25,7 +25,9 @@ code, docs and commit messages. Three crates:
   telemetry and bug reports, all of it per Windows user, one user served at
   a time (see "Relays, shares and telemetry" below). Each user's connection
   logs live under `%PROGRAMDATA%\Spora\users\<SID>\connlog\<routing hash>`
-  (proto fields control it); human-readable service log at
+  (proto fields control it), and a running share also sweeps the logs of
+  the user's earlier shares there by retention (the core's
+  `ConnLogConfig.sweep_siblings`); human-readable service log at
   `%PROGRAMDATA%\Spora\spora-wincore.log` (through `spora-winlog`). All of
   `%PROGRAMDATA%\Spora` is SYSTEM and Administrators only.
 - **spora-winui** — Slint desktop UI. Pure gRPC client of wincore — no

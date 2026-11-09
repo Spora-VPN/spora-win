@@ -247,6 +247,10 @@ impl Spora for SporaService {
                     );
                 }
                 cl.log_destinations = !req.conn_log_sessions_only;
+                // The user's connlog\ holds one log per share and nothing
+                // else: a share replaced or deleted in the UI leaves its log
+                // there, and this keeps it to its retention.
+                cl.sweep_siblings = true;
                 Some(cl)
             };
             info!(
