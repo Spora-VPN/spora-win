@@ -627,7 +627,7 @@ fn report_dir() -> PathBuf {
 fn write_report(zip: &[u8]) -> Result<PathBuf, String> {
     let dir = report_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
     let path = dir.join(format!("spora-report-{stamp}.zip"));
     std::fs::write(&path, zip).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(path)

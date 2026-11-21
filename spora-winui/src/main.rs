@@ -293,37 +293,40 @@ fn display_link(url: &str) -> String {
 
 // ── Formatting ───────────────────────────────────────────────────────
 
-fn fmt_date(ts: i64) -> String {
-    use chrono::TimeZone;
+/// Unix seconds in `tz`; none for 0 (never) and out-of-range values.
+fn zoned(ts: i64, tz: jiff::tz::TimeZone) -> Option<jiff::Zoned> {
     if ts <= 0 {
-        return String::new();
+        return None;
     }
-    chrono::Local
-        .timestamp_opt(ts, 0)
-        .single()
-        .map(|d| d.format("%-d %B %Y").to_string())
+    Some(jiff::Timestamp::from_second(ts).ok()?.to_zoned(tz))
+}
+
+fn fmt_date(ts: i64) -> String {
+    zoned(ts, jiff::tz::TimeZone::system())
+        .map(|d| d.strftime("%-d %B %Y").to_string())
         .unwrap_or_default()
 }
 
 fn fmt_datetime(ts: i64) -> String {
-    use chrono::{Datelike, TimeZone};
-    if ts <= 0 {
-        return String::new();
-    }
-    let Some(d) = chrono::Local.timestamp_opt(ts, 0).single() else {
-        return String::new();
-    };
-    let today = chrono::Local::now().date_naive();
-    let day = d.date_naive();
-    let time = d.format("%H:%M");
+    let tz = jiff::tz::TimeZone::system();
+    let today = jiff::Timestamp::now().to_zoned(tz.clone()).date();
+    zoned(ts, tz)
+        .map(|d| fmt_datetime_on(&d, today))
+        .unwrap_or_default()
+}
+
+/// `d` as the UI names it on `today`, the date in `d`'s time zone.
+fn fmt_datetime_on(d: &jiff::Zoned, today: jiff::civil::Date) -> String {
+    let day = d.date();
+    let time = d.strftime("%H:%M");
     if day == today {
         format!("today, {time}")
-    } else if day.succ_opt() == Some(today) {
+    } else if day.tomorrow().ok() == Some(today) {
         format!("yesterday, {time}")
     } else if day.year() == today.year() {
-        format!("{}, {time}", d.format("%-d %B"))
+        format!("{}, {time}", d.strftime("%-d %B"))
     } else {
-        format!("{}, {time}", d.format("%-d %B %Y"))
+        format!("{}, {time}", d.strftime("%-d %B %Y"))
     }
 }
 
@@ -1892,6 +1895,32 @@ mod tests {
         assert_eq!(convert_spora_url("spora.to/"), None);
         assert_eq!(convert_spora_url("spora.to/s/"), None);
         assert_eq!(convert_spora_url("not a spora link"), None);
+    }
+
+    #[test]
+    fn dates_read_as_today_yesterday_or_the_day() {
+        use jiff::tz::TimeZone;
+        // 2026-11-21 14:05:09 UTC.
+        let ts = 1_795_269_909;
+        let d = zoned(ts, TimeZone::UTC).unwrap();
+        assert_eq!(d.strftime("%-d %B %Y").to_string(), "21 November 2026");
+        let on = |y, m, day| fmt_datetime_on(&d, jiff::civil::date(y, m, day));
+        assert_eq!(on(2026, 11, 21), "today, 14:05");
+        assert_eq!(on(2026, 11, 22), "yesterday, 14:05");
+        assert_eq!(on(2026, 12, 25), "21 November, 14:05");
+        assert_eq!(on(2027, 1, 2), "21 November 2026, 14:05");
+        // Across a month's end, by the time zone's own date: at +02:00,
+        // 2026-10-31 23:59:59 is yesterday on 1 November, and 2026-11-01
+        // 00:30 is today there, though it is still 31 October in UTC.
+        let plus2 = TimeZone::fixed(jiff::tz::offset(2));
+        let nov1 = jiff::civil::date(2026, 11, 1);
+        let eve = zoned(1_793_483_999, plus2.clone()).unwrap();
+        assert_eq!(fmt_datetime_on(&eve, nov1), "yesterday, 23:59");
+        let past_midnight = zoned(1_793_485_800, plus2).unwrap();
+        assert_eq!(fmt_datetime_on(&past_midnight, nov1), "today, 00:30");
+        assert_eq!(zoned(0, TimeZone::UTC), None);
+        assert_eq!(fmt_date(0), "");
+        assert_eq!(fmt_datetime(-1), "");
     }
 
     #[test]

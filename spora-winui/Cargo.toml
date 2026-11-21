@@ -19,7 +19,10 @@ env_logger = "0.11"
 spora-winlog = { path = "../spora-winlog" }
 uuid = { version = "1", features = ["v4"] }
 arboard = "3"
-chrono = "0.4"
+# Local dates and times in the UI and the bug report's file name. Its
+# default features read the system time zone, and on Windows map it to the
+# tz database bundled into the exe.
+jiff = "0.2.16"
 # Share blobs in the saved-connections file.
 base64 = "0.22"
 # Tray icon (state-shaped, rendered from the mono mark at runtime) + its
