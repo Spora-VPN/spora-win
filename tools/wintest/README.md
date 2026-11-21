@@ -54,8 +54,11 @@ small agent running in the logged-on user's desktop session:
   `Invoke-Click`, `Invoke-ClickElement`, `Send-Text`, `Send-Keys`,
   `Send-Paste`, `Show-Ui`, `Move-Ui`. `wt ps '<script>'` runs anything with
   these in scope.
-- `win/deploy.ps1` and `win/setup.ps1` run in the SSH session (elevated):
-  service stop/copy/start and task registration respectively. Scripts are
+- `win/deploy.ps1`, `win/setup.ps1` and `win/stopui.ps1` run in the SSH
+  session (elevated): service stop/copy/start, task registration and
+  stopping the UI respectively. `wt kill` stops the UI from there because
+  the agent's limited token cannot end a UI running elevated, which the
+  installer's "Launch Spora" page starts. Scripts are
   invoked with `-ExecutionPolicy Bypass` because the box's policy is the
   default Restricted; nothing machine-wide is changed for that.
 
@@ -247,6 +250,7 @@ tools/wintest/
   win/lib.ps1        helpers available to jobs
   win/setup.ps1      task registration + power settings (elevated)
   win/deploy.ps1     swap exes into the install, cycle the service (elevated)
+  win/stopui.ps1     stop the UI, also one running elevated (elevated)
   win/vnc.ps1        install/configure TightVNC, loopback-only (elevated)
   peer/share.sh      runs on the peer: start the sharer unit, print the URL
 ```

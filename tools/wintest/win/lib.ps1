@@ -194,11 +194,21 @@ function Start-Ui {
     Write-Output ("window hwnd=0x{0:X} pid={1} at {2},{3} size {4}x{5} foreground={6}" -f $h.ToInt64(), (Get-UiProcess | Select-Object -First 1).Id, $r.X, $r.Y, $r.Width, $r.Height, $fg)
 }
 
+# Stops the UI from this session, whose token is limited: a UI running
+# elevated refuses (access denied) and is reported, with the job failing.
+# `wt kill` stops it from the elevated SSH session instead (stopui.ps1).
 function Stop-Ui {
-    $p = Get-UiProcess
+    $p = @(Get-UiProcess)
     if (-not $p) { Write-Output 'spora-winui not running'; return }
-    $p | Stop-Process -Force
-    Start-Sleep -Milliseconds 300
+    $p | Stop-Process -Force -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(5)
+    while ((Get-UiProcess) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    $left = @(Get-UiProcess)
+    if ($left) {
+        Write-Output "could not stop spora-winui (pid $($left.Id -join ',')): it may run elevated; 'wt kill' stops it"
+        $global:WT_RC = 1
+        return
+    }
     Write-Output "stopped spora-winui (pid $($p.Id -join ','))"
 }
 

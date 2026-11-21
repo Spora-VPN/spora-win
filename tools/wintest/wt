@@ -98,7 +98,7 @@ Windows box (WT_HOST, user@host):
                            build, copy exes over, cycle the service / restart-free UI swap
   run [URL] [--log LEVEL] [--keep-windows]
                            launch the installed UI in the desktop session (RUST_LOG=LEVEL), minimise other windows, park it top-left
-  kill                     stop the UI
+  kill                     stop the UI (from the elevated SSH session: also a UI running elevated)
   shot [NAME] [--screen|--flyout]
                            PNG of the Spora window (or the whole screen, or the tray flyout) -> target/wintest/shots/NAME.png
   tray                     click the tray icon through UI Automation (opens/closes the flyout); prints its tooltip
@@ -194,7 +194,7 @@ case $cmd in
     desk "${pre}Start-Ui -Arguments @($psargs)$keep"
     ;;
 
-  kill) desk 'Stop-Ui' ;;
+  kill) wps1 stopui.ps1 ;;
 
   shot)
     name=""; extra=""
@@ -248,7 +248,7 @@ case $cmd in
     ;;
 
   reset)
-    desk 'Stop-Ui'
+    wps1 stopui.ps1
     wssh "Remove-Item -Recurse -Force \"\$env:APPDATA\\spora\" -ErrorAction SilentlyContinue; Remove-Item \"\$env:LOCALAPPDATA\\Spora\\spora-winui.log\" -ErrorAction SilentlyContinue; 'reset: saved connections and UI log removed'"
     ;;
 
