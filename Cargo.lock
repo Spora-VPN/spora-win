@@ -5284,7 +5284,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "relay-client"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "log",
  "ring",
@@ -6094,7 +6094,7 @@ dependencies = [
 
 [[package]]
 name = "spora-core"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -6127,7 +6127,7 @@ dependencies = [
 
 [[package]]
 name = "spora-service"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "spora-vpn"
-version = "0.1.0"
+version = "0.3.3"
 dependencies = [
  "futures-util",
  "libc",
