@@ -236,8 +236,8 @@ impl Spora for SporaService {
             // Connection logging is on by default (the sharer's IP fronts the
             // client's traffic), in the user's own directory; the UI can opt
             // out or set the retention.
-            let conn_log = if req.disable_conn_log {
-                None
+            let (conn_log, conn_log_dir) = if req.disable_conn_log {
+                (None, None)
             } else {
                 let dir = backend.dirs.connlog(&share.routing_hash());
                 let mut cl = spora_core::connlog::ConnLogConfig::in_dir(&dir);
@@ -251,7 +251,7 @@ impl Spora for SporaService {
                 // else: a share replaced or deleted in the UI leaves its log
                 // there, and this keeps it to its retention.
                 cl.sweep_siblings = true;
-                Some(cl)
+                (Some(cl), Some(dir))
             };
             info!(
                 "gRPC Share({}): {} relay(s){}, connection log {}",
@@ -262,9 +262,8 @@ impl Spora for SporaService {
                 } else {
                     ""
                 },
-                conn_log
-                    .as_ref()
-                    .map(|cl| cl.dir.display().to_string())
+                conn_log_dir
+                    .map(|dir| dir.display().to_string())
                     .unwrap_or_else(|| "disabled".into()),
             );
 
