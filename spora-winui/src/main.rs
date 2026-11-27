@@ -130,7 +130,10 @@ struct Banner {
 
 impl Banner {
     fn plain(text: impl Into<String>) -> Self {
-        Self { text: text.into(), settings: false }
+        Self {
+            text: text.into(),
+            settings: false,
+        }
     }
 }
 
@@ -163,8 +166,18 @@ impl AppState {
     }
     fn label(&self, role: Role, id: &str) -> String {
         match role {
-            Role::Share => self.store.shared.iter().find(|c| c.id == id).map(|c| c.label.clone()),
-            Role::Use => self.store.uses.iter().find(|c| c.id == id).map(|c| c.label.clone()),
+            Role::Share => self
+                .store
+                .shared
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.label.clone()),
+            Role::Use => self
+                .store
+                .uses
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.label.clone()),
         }
         .unwrap_or_default()
     }
@@ -190,7 +203,11 @@ impl AppState {
             .first()
             .map(|c| (Role::Share, c.id.clone()))
             .or_else(|| self.store.uses.first().map(|c| (Role::Use, c.id.clone())));
-        self.pane = if self.selected.is_some() { Pane::Detail } else { Pane::Empty };
+        self.pane = if self.selected.is_some() {
+            Pane::Detail
+        } else {
+            Pane::Empty
+        };
     }
     /// The share being created is no longer in creation (it failed, was
     /// stopped, or the user navigated away): drop the marker and leave the
@@ -199,7 +216,11 @@ impl AppState {
         if self.creating.as_deref() == Some(id) {
             self.creating = None;
             if matches!(self.pane, Pane::Creating | Pane::NewShare) {
-                self.pane = if self.selected.is_some() { Pane::Detail } else { Pane::Empty };
+                self.pane = if self.selected.is_some() {
+                    Pane::Detail
+                } else {
+                    Pane::Empty
+                };
             }
         }
     }
@@ -278,7 +299,11 @@ fn convert_spora_url(input: &str) -> Option<String> {
     // "not a Spora link" (the dialog's validation error).
     let key = rest.strip_prefix("s/")?;
     let key = key.split(['?', '/', '#']).next().unwrap_or("");
-    if key.is_empty() || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+    if key.is_empty()
+        || !key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
         return None;
     }
     Some(format!("https://spora.to/{rest}"))
@@ -360,7 +385,8 @@ fn barcode(seed: u32, bars: usize) -> Vec<f32> {
 }
 
 fn seed_for(id: &str) -> u32 {
-    id.bytes().fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))
+    id.bytes()
+        .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32))
 }
 
 // ── Rendering: state → UI ────────────────────────────────────────────
@@ -372,15 +398,29 @@ fn item_for(s: &AppState, role: Role, id: &str) -> Option<ConnectionItem> {
         .and_then(|r| r.error.clone())
         .filter(|_| status == Status::Error)
         .unwrap_or_default();
-    let error_action = if needs_new_link(s, role, id) { "new-link" } else { "retry" };
+    let error_action = if needs_new_link(s, role, id) {
+        "new-link"
+    } else {
+        "retry"
+    };
     let (label, url, created, last) = match role {
         Role::Share => {
             let c = s.store.shared.iter().find(|c| c.id == id)?;
-            (c.label.clone(), c.url.clone(), c.created_at, c.last_activity)
+            (
+                c.label.clone(),
+                c.url.clone(),
+                c.created_at,
+                c.last_activity,
+            )
         }
         Role::Use => {
             let c = s.store.uses.iter().find(|c| c.id == id)?;
-            (c.label.clone(), c.url.clone(), c.created_at, c.last_activity)
+            (
+                c.label.clone(),
+                c.url.clone(),
+                c.created_at,
+                c.last_activity,
+            )
         }
     };
     Some(ConnectionItem {
@@ -435,11 +475,29 @@ fn status_lines(s: &AppState) -> Vec<StatusLine> {
         .collect();
     if !sharing.is_empty() {
         // Names up to two, a count past that (canvas 3b).
-        let tail = if sharing.len() <= 2 { sharing.join(", ") } else { sharing.len().to_string() };
-        lines.push(line("active", format!("↑ SHARING — {tail}"), "↑ SHARING", "success"));
+        let tail = if sharing.len() <= 2 {
+            sharing.join(", ")
+        } else {
+            sharing.len().to_string()
+        };
+        lines.push(line(
+            "active",
+            format!("↑ SHARING — {tail}"),
+            "↑ SHARING",
+            "success",
+        ));
     }
-    if s.store.shared.iter().any(|c| s.status(&c.id) == Status::Starting) {
-        lines.push(line("pending", "↑ STARTING…".into(), "↑ STARTING…", "pending"));
+    if s.store
+        .shared
+        .iter()
+        .any(|c| s.status(&c.id) == Status::Starting)
+    {
+        lines.push(line(
+            "pending",
+            "↑ STARTING…".into(),
+            "↑ STARTING…",
+            "pending",
+        ));
     }
     if lines.is_empty() {
         // Nothing live: an error is the headline (canvas 1h), else OFFLINE.
@@ -530,8 +588,21 @@ fn render(ctx: &Ctx) {
         }
         .into(),
     );
-    app.set_banner(s.banner.as_ref().map(|b| b.text.clone()).unwrap_or_default().into());
-    app.set_banner_action(if s.banner.as_ref().is_some_and(|b| b.settings) { "OPEN SETTINGS" } else { "" }.into());
+    app.set_banner(
+        s.banner
+            .as_ref()
+            .map(|b| b.text.clone())
+            .unwrap_or_default()
+            .into(),
+    );
+    app.set_banner_action(
+        if s.banner.as_ref().is_some_and(|b| b.settings) {
+            "OPEN SETTINGS"
+        } else {
+            ""
+        }
+        .into(),
+    );
     settings::push(&app, &mut s);
 
     if let Some(flyout) = ctx.flyout.upgrade() {
@@ -548,7 +619,10 @@ fn render(ctx: &Ctx) {
     drop(s);
     LAST_TRAY.with(|last| {
         let mut last = last.borrow_mut();
-        if last.as_ref().is_none_or(|(st, tip)| *st != tray || *tip != tooltip) {
+        if last
+            .as_ref()
+            .is_none_or(|(st, tip)| *st != tray || *tip != tooltip)
+        {
             TRAY.with(|t| {
                 if let Some(t) = t.borrow().as_ref() {
                     t.set_state(tray, &tooltip);
@@ -595,7 +669,9 @@ fn apply_window_chrome(weak: slint::Weak<AppWindow>, attempt: u32) {
             .with_winit_window(|w| {
                 #[cfg(windows)]
                 {
-                    use slint::winit_030::winit::platform::windows::{CornerPreference, WindowExtWindows};
+                    use slint::winit_030::winit::platform::windows::{
+                        CornerPreference, WindowExtWindows,
+                    };
                     w.set_undecorated_shadow(true);
                     w.set_corner_preference(CornerPreference::Round);
                 }
@@ -604,7 +680,9 @@ fn apply_window_chrome(weak: slint::Weak<AppWindow>, attempt: u32) {
             .is_some()
     };
     if !applied && attempt < 40 {
-        slint::Timer::single_shot(Duration::from_millis(50), move || apply_window_chrome(weak, attempt + 1));
+        slint::Timer::single_shot(Duration::from_millis(50), move || {
+            apply_window_chrome(weak, attempt + 1)
+        });
     }
 }
 
@@ -619,7 +697,10 @@ fn track_maximized(app: &AppWindow) {
             let weak = weak.clone();
             slint::Timer::single_shot(Duration::ZERO, move || {
                 if let Some(app) = weak.upgrade() {
-                    let maximized = app.window().with_winit_window(|w| w.is_maximized()).unwrap_or(false);
+                    let maximized = app
+                        .window()
+                        .with_winit_window(|w| w.is_maximized())
+                        .unwrap_or(false);
                     if app.get_maximized() != maximized {
                         app.set_maximized(maximized);
                     }
@@ -641,7 +722,11 @@ fn place_flyout(flyout: &TrayFlyout) {
     let (w, h) = (size.width as f64, size.height as f64);
     let (ix, iy, iw, ih) = if icon.2 > 0.0 { icon } else { (x, y, 0.0, 0.0) };
     let px = (ix + iw - w).max(0.0);
-    let py = if iy > h + 8.0 { iy - h - 8.0 } else { iy + ih + 8.0 };
+    let py = if iy > h + 8.0 {
+        iy - h - 8.0
+    } else {
+        iy + ih + 8.0
+    };
     log::debug!("flyout placed: size {w}x{h} at {px},{py} (icon {icon:?})");
     flyout
         .window()
@@ -713,7 +798,10 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, share: Vec<u8>) {
                     ended_in_error = true;
                     drop(s);
                     if was_live {
-                        toast::show("Sharing interrupted", &format!("«{label}» is no longer shared."));
+                        toast::show(
+                            "Sharing interrupted",
+                            &format!("«{label}» is no longer shared."),
+                        );
                     }
                 }
                 break;
@@ -761,9 +849,17 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, share: Vec<u8>) {
                 s.leave_creating(&id);
                 drop(s);
                 if lost {
-                    toast::show("Couldn't start sharing", &format!("«{label}»: this link no longer works. Make a new link and send it again."));
+                    toast::show(
+                        "Couldn't start sharing",
+                        &format!(
+                            "«{label}»: this link no longer works. Make a new link and send it again."
+                        ),
+                    );
                 } else {
-                    toast::show("Couldn't start sharing", &format!("«{label}»: {}", err.message));
+                    toast::show(
+                        "Couldn't start sharing",
+                        &format!("«{label}»: {}", err.message),
+                    );
                 }
                 ended_in_error = true;
                 break;
@@ -776,7 +872,10 @@ async fn run_share(ctx: Ctx, grpc: GrpcClient, id: String, share: Vec<u8>) {
             }
             share_event::Event::ConnLogDegraded(d) => {
                 log::error!("Connection log degraded: {}", d.detail);
-                s.banner = Some(Banner::plain(format!("The connection log couldn't be written: {}", d.detail)));
+                s.banner = Some(Banner::plain(format!(
+                    "The connection log couldn't be written: {}",
+                    d.detail
+                )));
                 drop(s);
                 ctx.refresh();
             }
@@ -843,7 +942,10 @@ async fn run_use(ctx: Ctx, grpc: GrpcClient, id: String, url: String) {
                     ended_in_error = true;
                     drop(s);
                     if was_live {
-                        toast::show("Connection lost", &format!("Couldn't stay connected via «{label}»."));
+                        toast::show(
+                            "Connection lost",
+                            &format!("Couldn't stay connected via «{label}»."),
+                        );
                     }
                 }
                 break;
@@ -862,7 +964,10 @@ async fn run_use(ctx: Ctx, grpc: GrpcClient, id: String, url: String) {
                 s.store.touch_use(&id);
                 let label = s.label(Role::Use, &id);
                 drop(s);
-                toast::show("Connected", &format!("Your traffic goes through «{label}»."));
+                toast::show(
+                    "Connected",
+                    &format!("Your traffic goes through «{label}»."),
+                );
                 ctx.refresh();
             }
             connect_event::Event::Disconnected(d) => {
@@ -873,7 +978,10 @@ async fn run_use(ctx: Ctx, grpc: GrpcClient, id: String, url: String) {
                 s.set_error(&id, "Connection lost.", d.reason.clone());
                 drop(s);
                 if was_connected {
-                    toast::show("Connection lost", &format!("Couldn't stay connected via «{label}»."));
+                    toast::show(
+                        "Connection lost",
+                        &format!("Couldn't stay connected via «{label}»."),
+                    );
                 }
                 ended_in_error = true;
                 break;
@@ -883,7 +991,10 @@ async fn run_use(ctx: Ctx, grpc: GrpcClient, id: String, url: String) {
                 let label = s.label(Role::Use, &id);
                 s.set_error(&id, "Couldn't connect.", err.message.clone());
                 drop(s);
-                toast::show("Couldn't connect", &format!("Couldn't connect via «{label}»."));
+                toast::show(
+                    "Couldn't connect",
+                    &format!("Couldn't connect via «{label}»."),
+                );
                 ended_in_error = true;
                 break;
             }
@@ -923,19 +1034,39 @@ fn start(ctx: &Ctx, role: Role, id: &str) {
         return;
     }
     let Some(grpc) = ctx.client() else {
-        s.banner = Some(Banner::plain("Can't reach the Spora service yet. Retrying…"));
+        s.banner = Some(Banner::plain(
+            "Can't reach the Spora service yet. Retrying…",
+        ));
         drop(s);
         render(ctx);
         return;
     };
     let task = match role {
         Role::Share => {
-            let Some(share) = s.store.shared.iter().find(|c| c.id == id).map(|c| c.share.clone()) else { return };
-            ctx.rt.spawn(run_share(ctx.clone(), grpc, id.to_string(), share))
+            let Some(share) = s
+                .store
+                .shared
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.share.clone())
+            else {
+                return;
+            };
+            ctx.rt
+                .spawn(run_share(ctx.clone(), grpc, id.to_string(), share))
         }
         Role::Use => {
-            let Some(url) = s.store.uses.iter().find(|c| c.id == id).map(|c| c.url.clone()) else { return };
-            ctx.rt.spawn(run_use(ctx.clone(), grpc, id.to_string(), url))
+            let Some(url) = s
+                .store
+                .uses
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| c.url.clone())
+            else {
+                return;
+            };
+            ctx.rt
+                .spawn(run_use(ctx.clone(), grpc, id.to_string(), url))
         }
     };
     s.rt(id).task = Some(task.abort_handle());
@@ -983,7 +1114,10 @@ fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
     if s.creating.is_some() {
         return;
     }
-    let prefill = replace.as_ref().map(|id| s.label(Role::Share, id)).unwrap_or_default();
+    let prefill = replace
+        .as_ref()
+        .map(|id| s.label(Role::Share, id))
+        .unwrap_or_default();
     if s.demo {
         // Simulate the busy moment, then the handoff.
         let id = match &replace {
@@ -1008,7 +1142,10 @@ fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
             }
             s.creating = None;
             s.pane = Pane::NewShare;
-            s.store.set_share_url(&id, "https://spora.to/s/AbuF2kq0pD3x9mHq7LwZcE5nT8vRyJ4aGs6oXbKe1fUiPhNtMlWdQz");
+            s.store.set_share_url(
+                &id,
+                "https://spora.to/s/AbuF2kq0pD3x9mHq7LwZcE5nT8vRyJ4aGs6oXbKe1fUiPhNtMlWdQz",
+            );
             let rt = s.rt(&id);
             rt.status = Status::Sharing;
             rt.error = None;
@@ -1019,7 +1156,9 @@ fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
         return;
     }
     let Some(grpc) = ctx.client() else {
-        s.banner = Some(Banner::plain("Can't reach the Spora service yet. Retrying…"));
+        s.banner = Some(Banner::plain(
+            "Can't reach the Spora service yet. Retrying…",
+        ));
         drop(s);
         render(ctx);
         return;
@@ -1056,7 +1195,9 @@ fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
                 };
                 s.selected = Some((Role::Share, id.clone()));
                 s.creating = Some(id.clone());
-                let task = ctx2.rt.spawn(run_share(ctx2.clone(), grpc, id.clone(), m.share));
+                let task = ctx2
+                    .rt
+                    .spawn(run_share(ctx2.clone(), grpc, id.clone(), m.share));
                 s.rt(&id).task = Some(task.abort_handle());
             }
             Ok(m) => {
@@ -1064,7 +1205,10 @@ fn make_link(ctx: &Ctx, app: &AppWindow, replace: Option<String>) {
                 log::error!("MakeShare failed ({}): {}", m.error, m.detail);
                 s.creating = None;
                 s.creating_replaces = false;
-                s.banner = Some(Banner { text, settings: fix });
+                s.banner = Some(Banner {
+                    text,
+                    settings: fix,
+                });
                 s.select_fallback();
             }
             Err(e) => {
@@ -1148,7 +1292,12 @@ fn dialog_save(ctx: &Ctx, app: &AppWindow, url: &str, name: &str) {
     app.set_show_connect_dialog(false);
     app.set_dialog_url_error("".into());
     let mut s = ctx.lock();
-    let existing = s.store.uses.iter().find(|c| c.url == url).map(|c| c.id.clone());
+    let existing = s
+        .store
+        .uses
+        .iter()
+        .find(|c| c.url == url)
+        .map(|c| c.id.clone());
     let id = match existing {
         Some(id) => {
             let name = name.trim();
@@ -1158,7 +1307,11 @@ fn dialog_save(ctx: &Ctx, app: &AppWindow, url: &str, name: &str) {
             id
         }
         None => {
-            let label = if name.trim().is_empty() { s.store.next_label(false) } else { name.trim().to_string() };
+            let label = if name.trim().is_empty() {
+                s.store.next_label(false)
+            } else {
+                name.trim().to_string()
+            };
             s.store.add_use(label, url)
         }
     };
@@ -1182,7 +1335,12 @@ fn handle_incoming_url(ctx: &Ctx, app: &AppWindow, url: &str) {
     show_main(app);
     let mut s = ctx.lock();
     s.creating = None;
-    let known = s.store.uses.iter().find(|c| c.url == url).map(|c| c.id.clone());
+    let known = s
+        .store
+        .uses
+        .iter()
+        .find(|c| c.url == url)
+        .map(|c| c.id.clone());
     match known {
         Some(id) => {
             s.selected = Some((Role::Use, id.clone()));
@@ -1246,9 +1404,16 @@ fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
     }
     let day = 86_400;
     let t = store::now();
-    let mut share = |label: &str, status: Status, url: &str, created: i64, last: i64, err: Option<(&str, &str)>| {
+    let mut share = |label: &str,
+                     status: Status,
+                     url: &str,
+                     created: i64,
+                     last: i64,
+                     err: Option<(&str, &str)>| {
         // Any non-empty blob: a demo share never reaches the service.
-        let id = s.store.add_shared(label.into(), b"demo".to_vec(), String::new());
+        let id = s
+            .store
+            .add_shared(label.into(), b"demo".to_vec(), String::new());
         s.store.set_share_url(&id, url);
         if let Some(c) = s.store.shared.iter_mut().find(|c| c.id == id) {
             c.created_at = created;
@@ -1264,10 +1429,41 @@ fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
         }
         id
     };
-    let mom = share("Mom's phone", Status::Sharing, "https://spora.to/s/4kd02mze7q", t - 141 * day, t - 600, None);
-    let alesya = share("Alesya's phone", Status::Starting, "https://spora.to/s/8h2ks0qz1a", t - 30 * day, t - 3 * day, None);
-    let work = share("Work laptop", Status::Error, "https://spora.to/s/0pl3mx7bq2", t - 12 * day, t - day, Some(("Couldn't start sharing.", "relay handshake timed out (relay.spora.to:443)")));
-    share("Old tablet", Status::Inactive, "https://spora.to/s/x91ke2n0ma", t - 200 * day, t - 40 * day, None);
+    let mom = share(
+        "Mom's phone",
+        Status::Sharing,
+        "https://spora.to/s/4kd02mze7q",
+        t - 141 * day,
+        t - 600,
+        None,
+    );
+    let alesya = share(
+        "Alesya's phone",
+        Status::Starting,
+        "https://spora.to/s/8h2ks0qz1a",
+        t - 30 * day,
+        t - 3 * day,
+        None,
+    );
+    let work = share(
+        "Work laptop",
+        Status::Error,
+        "https://spora.to/s/0pl3mx7bq2",
+        t - 12 * day,
+        t - day,
+        Some((
+            "Couldn't start sharing.",
+            "relay handshake timed out (relay.spora.to:443)",
+        )),
+    );
+    share(
+        "Old tablet",
+        Status::Inactive,
+        "https://spora.to/s/x91ke2n0ma",
+        t - 200 * day,
+        t - 40 * day,
+        None,
+    );
     let mut link = |label: &str, status: Status, url: &str, created: i64, last: i64| {
         let id = s.store.add_use(label.into(), url.into());
         if let Some(c) = s.store.uses.iter_mut().find(|c| c.id == id) {
@@ -1281,8 +1477,20 @@ fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
         }
         id
     };
-    let dana = link("Dana's home", Status::Connected, "https://spora.to/s/7f3kq2w8r1?r=relay.spora.to:443", t - 101 * day, t - 120);
-    link("Flat in Berlin", Status::Inactive, "https://spora.to/s/2nn7x0ab3c", t - 60 * day, t - 9 * day);
+    let dana = link(
+        "Dana's home",
+        Status::Connected,
+        "https://spora.to/s/7f3kq2w8r1?r=relay.spora.to:443",
+        t - 101 * day,
+        t - 120,
+    );
+    link(
+        "Flat in Berlin",
+        Status::Inactive,
+        "https://spora.to/s/2nn7x0ab3c",
+        t - 60 * day,
+        t - 9 * day,
+    );
     match mode {
         "share" => {
             s.selected = Some((Role::Share, mom));
@@ -1300,7 +1508,9 @@ fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
         "banner" => {
             s.selected = Some((Role::Use, dana));
             s.pane = Pane::Detail;
-            s.banner = Some(Banner::plain("Couldn't connect. Ask your friend for a new link."));
+            s.banner = Some(Banner::plain(
+                "Couldn't connect. Ask your friend for a new link.",
+            ));
         }
         "error" => {
             // Nothing live, one failed share: the error is the headline
@@ -1336,7 +1546,9 @@ fn seed_demo(s: &mut AppState, app: &AppWindow, mode: &str) {
 
 fn main() {
     // A `spora:` URL on the command line (URI-scheme launch).
-    let initial_url = std::env::args().skip(1).find_map(|arg| convert_spora_url(&arg));
+    let initial_url = std::env::args()
+        .skip(1)
+        .find_map(|arg| convert_spora_url(&arg));
 
     // Single-instance enforcement: try to bind a known port. If we can't,
     // another instance is running — hand it the URL and exit.
@@ -1356,7 +1568,9 @@ fn main() {
                 Err(_) => {
                     // The port is taken by something that is not Spora:
                     // run anyway, just without single-instance enforcement.
-                    eprintln!("single-instance port {SINGLE_INSTANCE_PORT} unavailable ({bind_err}); continuing");
+                    eprintln!(
+                        "single-instance port {SINGLE_INSTANCE_PORT} unavailable ({bind_err}); continuing"
+                    );
                     None
                 }
             }
@@ -1391,7 +1605,11 @@ fn main() {
     let flyout = TrayFlyout::new().unwrap();
 
     let mut state = AppState {
-        store: if demo_mode.is_some() { Store::ephemeral() } else { Store::load() },
+        store: if demo_mode.is_some() {
+            Store::ephemeral()
+        } else {
+            Store::load()
+        },
         runtime: HashMap::new(),
         selected: None,
         pane: Pane::Empty,
@@ -1444,7 +1662,9 @@ fn main() {
         let weak = flyout.as_weak();
         flyout.window().on_winit_window_event(move |_, ev| {
             match ev {
-                winit::event::WindowEvent::Focused(false) if std::env::var_os("SPORA_UI_DEMO_FLYOUT").is_none() => {
+                winit::event::WindowEvent::Focused(false)
+                    if std::env::var_os("SPORA_UI_DEMO_FLYOUT").is_none() =>
+                {
                     let weak = weak.clone();
                     slint::Timer::single_shot(Duration::ZERO, move || {
                         if let Some(f) = weak.upgrade()
@@ -1496,7 +1716,10 @@ fn main() {
                         tokio::spawn(settings::poll(ctx2.clone()));
                         let mut s = ctx2.lock();
                         s.service_online = true;
-                        if s.banner.as_ref().is_some_and(|b| b.text.starts_with("Can't reach the Spora service")) {
+                        if s.banner
+                            .as_ref()
+                            .is_some_and(|b| b.text.starts_with("Can't reach the Spora service"))
+                        {
                             s.banner = None;
                         }
                         drop(s);
@@ -1507,7 +1730,8 @@ fn main() {
                         attempts += 1;
                         log::warn!("gRPC connect failed, retrying in 2s: {e}");
                         if attempts == 3 {
-                            ctx2.lock().banner = Some(Banner::plain("Can't reach the Spora service. Retrying…"));
+                            ctx2.lock().banner =
+                                Some(Banner::plain("Can't reach the Spora service. Retrying…"));
                             ctx2.refresh();
                         }
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1526,9 +1750,12 @@ fn main() {
         if let Some(std_listener) = instance_listener {
             let url_tx = url_tx.clone();
             rt.spawn(async move {
-                let listener = tokio::net::TcpListener::from_std(std_listener).expect("failed to convert TcpListener");
+                let listener = tokio::net::TcpListener::from_std(std_listener)
+                    .expect("failed to convert TcpListener");
                 loop {
-                    let Ok((stream, _)) = listener.accept().await else { continue };
+                    let Ok((stream, _)) = listener.accept().await else {
+                        continue;
+                    };
                     let url_tx = url_tx.clone();
                     tokio::spawn(async move {
                         use tokio::io::AsyncBufReadExt;
@@ -1568,7 +1795,9 @@ fn main() {
     {
         let ctx = ctx.clone();
         app.on_select(move |role, id| {
-            let Some(role) = Role::parse(&role) else { return };
+            let Some(role) = Role::parse(&role) else {
+                return;
+            };
             let mut s = ctx.lock();
             s.creating = None; // navigating away ends the handoff, not the share
             s.selected = Some((role, id.to_string()));
@@ -1597,8 +1826,14 @@ fn main() {
     {
         let ctx = ctx.clone();
         app.on_toggle(move |id, role, on| {
-            let Some(role) = Role::parse(&role) else { return };
-            if on { start(&ctx, role, &id) } else { stop(&ctx, role, &id) }
+            let Some(role) = Role::parse(&role) else {
+                return;
+            };
+            if on {
+                start(&ctx, role, &id)
+            } else {
+                stop(&ctx, role, &id)
+            }
         });
     }
     {
@@ -1688,7 +1923,8 @@ fn main() {
         let weak = app.as_weak();
         app.on_toggle_maximize(move || {
             if let Some(app) = weak.upgrade() {
-                app.window().with_winit_window(|w| w.set_maximized(!w.is_maximized()));
+                app.window()
+                    .with_winit_window(|w| w.set_maximized(!w.is_maximized()));
             }
         });
         let weak = app.as_weak();
@@ -1703,8 +1939,14 @@ fn main() {
     {
         let ctx = ctx.clone();
         flyout.on_toggle(move |id, role, on| {
-            let Some(role) = Role::parse(&role) else { return };
-            if on { start(&ctx, role, &id) } else { stop(&ctx, role, &id) }
+            let Some(role) = Role::parse(&role) else {
+                return;
+            };
+            if on {
+                start(&ctx, role, &id)
+            } else {
+                stop(&ctx, role, &id)
+            }
         });
     }
     {
@@ -1732,19 +1974,23 @@ fn main() {
     let ticker = slint::Timer::default();
     {
         let ctx = ctx.clone();
-        ticker.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
-            let Some(app) = ctx.app.upgrade() else { return };
-            let s = ctx.lock();
-            let elapsed = s
-                .selected
-                .as_ref()
-                .and_then(|(_, id)| s.runtime.get(id))
-                .and_then(|r| r.started_at)
-                .map(fmt_elapsed)
-                .unwrap_or_default();
-            drop(s);
-            app.set_selected_elapsed(elapsed.into());
-        });
+        ticker.start(
+            slint::TimerMode::Repeated,
+            Duration::from_secs(1),
+            move || {
+                let Some(app) = ctx.app.upgrade() else { return };
+                let s = ctx.lock();
+                let elapsed = s
+                    .selected
+                    .as_ref()
+                    .and_then(|(_, id)| s.runtime.get(id))
+                    .and_then(|r| r.started_at)
+                    .map(fmt_elapsed)
+                    .unwrap_or_default();
+                drop(s);
+                app.set_selected_elapsed(elapsed.into());
+            },
+        );
     }
 
     render(&ctx);
@@ -1857,17 +2103,26 @@ fn log_dir() -> std::path::PathBuf {
     #[cfg(windows)]
     {
         // %LOCALAPPDATA%\Spora
-        std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join("Spora")
+        std::path::PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into()))
+            .join("Spora")
     }
     #[cfg(not(windows))]
     {
-        std::env::current_exe().unwrap().parent().unwrap().to_path_buf()
+        std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
     }
 }
 
 #[cfg(not(windows))]
 fn launch_wincore() {
-    let exe_dir = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+    let exe_dir = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
     let log_path = log_dir().join("spora-wincore.log");
     let exe = exe_dir.join("spora-wincore");
     if exe.exists() {
@@ -1875,7 +2130,10 @@ fn launch_wincore() {
             .args(["--log-file", &log_path.to_string_lossy()])
             .spawn();
     } else {
-        log::warn!("spora-wincore not found at {}, skipping launch", exe.display());
+        log::warn!(
+            "spora-wincore not found at {}, skipping launch",
+            exe.display()
+        );
     }
     log::info!("Wincore log file: {}", log_path.display());
 }
@@ -1886,9 +2144,18 @@ mod tests {
 
     #[test]
     fn url_forms_normalise() {
-        assert_eq!(convert_spora_url("spora:s/abc?r=h:443").as_deref(), Some("https://spora.to/s/abc?r=h:443"));
-        assert_eq!(convert_spora_url(" spora.to/s/abc ").as_deref(), Some("https://spora.to/s/abc"));
-        assert_eq!(convert_spora_url("https://spora.to/s/abc").as_deref(), Some("https://spora.to/s/abc"));
+        assert_eq!(
+            convert_spora_url("spora:s/abc?r=h:443").as_deref(),
+            Some("https://spora.to/s/abc?r=h:443")
+        );
+        assert_eq!(
+            convert_spora_url(" spora.to/s/abc ").as_deref(),
+            Some("https://spora.to/s/abc")
+        );
+        assert_eq!(
+            convert_spora_url("https://spora.to/s/abc").as_deref(),
+            Some("https://spora.to/s/abc")
+        );
         assert_eq!(convert_spora_url("https://example.com/s/abc"), None);
         // The design's own malformed example must be rejected (canvas 1g).
         assert_eq!(convert_spora_url("spora.to/абы-што"), None);

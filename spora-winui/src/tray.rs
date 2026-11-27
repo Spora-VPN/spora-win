@@ -53,7 +53,11 @@ pub enum TrayEvent {
     /// A Windows double-click arrives as one `LeftClick` followed by
     /// [`TrayEvent::OpenWindow`]; the second button-up the OS sends after the
     /// double-click is swallowed here so the flyout is not toggled twice.
-    LeftClick { x: f64, y: f64, icon: (f64, f64, f64, f64) },
+    LeftClick {
+        x: f64,
+        y: f64,
+        icon: (f64, f64, f64, f64),
+    },
     /// Double-click on the icon, or "Open Spora" in the menu.
     OpenWindow,
     /// "Create a link to share…" in the menu.
@@ -197,8 +201,8 @@ mod render {
         } else {
             (MARK_SVG_LIGHT, INK_DARK_THEME)
         };
-        let mut pixmap =
-            Pixmap::new(size, size).ok_or_else(|| format!("tray icon: cannot allocate a {size}px pixmap"))?;
+        let mut pixmap = Pixmap::new(size, size)
+            .ok_or_else(|| format!("tray icon: cannot allocate a {size}px pixmap"))?;
         let s = size as f32;
         let inner = (s - 2.0 * PADDING).max(1.0);
 
@@ -247,7 +251,10 @@ mod render {
                 // width so the ring's outer edge stays inside the shape box.
                 let width = (s * RING_STROKE_FRACTION).max(1.0);
                 if let Some(ring) = PathBuilder::from_circle(cx, cy, r - width / 2.0) {
-                    let stroke = Stroke { width, ..Stroke::default() };
+                    let stroke = Stroke {
+                        width,
+                        ..Stroke::default()
+                    };
                     pixmap.stroke_path(&ring, &paint, &stroke, identity, None);
                 }
             }
@@ -337,7 +344,10 @@ mod imp {
     /// becomes a `LeftClick`, DBLCLK becomes `OpenWindow`, and the second UP
     /// is dropped when it follows the DBLCLK closely enough, so the flyout
     /// the caller opened on the first UP is not toggled again.
-    fn map_icon_event(ev: TrayIconEvent, last_double_click: &Mutex<Option<Instant>>) -> Option<TrayEvent> {
+    fn map_icon_event(
+        ev: TrayIconEvent,
+        last_double_click: &Mutex<Option<Instant>>,
+    ) -> Option<TrayEvent> {
         match ev {
             TrayIconEvent::Click {
                 position,
@@ -463,7 +473,9 @@ mod imp {
             ERROR_SUCCESS => data != 0,
             ERROR_FILE_NOT_FOUND => true,
             other => {
-                log::debug!("tray: RegGetValueW(SystemUsesLightTheme) failed with {other}; assuming light");
+                log::debug!(
+                    "tray: RegGetValueW(SystemUsesLightTheme) failed with {other}; assuming light"
+                );
                 true
             }
         }

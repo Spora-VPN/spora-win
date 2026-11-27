@@ -64,7 +64,10 @@ impl Store {
                     // empty one: the shares in it cannot be made again (a new
                     // share is a new link).
                     let bak = path.with_extension("json.bak");
-                    log::error!("connections file unreadable ({e}); keeping it as {}", bak.display());
+                    log::error!(
+                        "connections file unreadable ({e}); keeping it as {}",
+                        bak.display()
+                    );
                     let _ = fs::rename(&path, &bak);
                     Store::default()
                 }

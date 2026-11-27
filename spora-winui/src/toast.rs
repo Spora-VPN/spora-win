@@ -84,8 +84,8 @@ mod win {
 
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, WIN32_ERROR};
     use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE,
-        REG_SZ, REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegQueryValueExW, RegSetValueExW,
+        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+        REG_VALUE_TYPE, RegCloseKey, RegCreateKeyExW, RegQueryValueExW, RegSetValueExW,
     };
 
     use super::AUMID;
@@ -178,7 +178,14 @@ mod win {
             // SAFETY: `name` and `data` are nul-terminated and outlive the
             // call; `bytes` is exactly the length of `data` in bytes.
             let status = unsafe {
-                RegSetValueExW(self.0, name.as_ptr(), 0, REG_SZ, data.as_ptr().cast(), bytes)
+                RegSetValueExW(
+                    self.0,
+                    name.as_ptr(),
+                    0,
+                    REG_SZ,
+                    data.as_ptr().cast(),
+                    bytes,
+                )
             };
             check(status).map_err(|e| format!("RegSetValueExW({value:?}): {e}"))?;
             Ok(true)
@@ -259,7 +266,17 @@ mod win {
         #[test]
         fn wide_is_nul_terminated_utf16() {
             let w = wide("Spora");
-            assert_eq!(w, [b'S' as u16, b'p' as u16, b'o' as u16, b'r' as u16, b'a' as u16, 0]);
+            assert_eq!(
+                w,
+                [
+                    b'S' as u16,
+                    b'p' as u16,
+                    b'o' as u16,
+                    b'r' as u16,
+                    b'a' as u16,
+                    0
+                ]
+            );
             // Byte length handed to RegSetValueExW includes the terminator.
             assert_eq!(w.len() * 2, 12);
         }
